@@ -1,0 +1,1 @@
+obj-m := soa_smoke.o
