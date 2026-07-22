@@ -5,4 +5,5 @@ obj-m := syscall_throttle.o
 syscall_throttle-y := \
     syscall_throttle_main.o \
     config.o \
-    uid_registry.o
+    uid_registry.o \
+    program_registry.o

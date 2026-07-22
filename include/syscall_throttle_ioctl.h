@@ -80,4 +80,52 @@ struct syscall_throttle_uid_list {
     _IOR(SYSCALL_THROTTLE_IOC_MAGIC, 8, \
          struct syscall_throttle_uid_list)
 
+
+
+
+
+
+
+/*
+ * Gestione dei nomi dei programmi.
+ *
+ * Il nome contiene al massimo 15 caratteri,
+ * più il terminatore '\0'.
+ */
+#define SYSCALL_THROTTLE_PROGRAM_NAME_LEN 16
+#define SYSCALL_THROTTLE_MAX_REGISTERED_PROGRAMS 64
+
+/*
+ * Nome di un programma trasferibile tra
+ * user-space e kernel-space.
+ */
+struct syscall_throttle_program {
+    char name[SYSCALL_THROTTLE_PROGRAM_NAME_LEN];
+};
+
+/*
+ * Snapshot dei programmi registrati.
+ */
+struct syscall_throttle_program_list {
+    __u32 count;
+
+    struct syscall_throttle_program
+        programs[SYSCALL_THROTTLE_MAX_REGISTERED_PROGRAMS];
+};
+
+#define SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM \
+    _IOW(SYSCALL_THROTTLE_IOC_MAGIC, 9, \
+         struct syscall_throttle_program)
+
+#define SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM \
+    _IOW(SYSCALL_THROTTLE_IOC_MAGIC, 10, \
+         struct syscall_throttle_program)
+
+#define SYSCALL_THROTTLE_IOC_GET_PROGRAMS \
+    _IOR(SYSCALL_THROTTLE_IOC_MAGIC, 11, \
+         struct syscall_throttle_program_list)
+
+
+
+
 #endif /* SYSCALL_THROTTLE_IOCTL_H */
