@@ -8,4 +8,5 @@ syscall_throttle-y := \
     uid_registry.o \
     program_registry.o \
     syscall_registry.o \
+    accounting.o \
     monitor.o

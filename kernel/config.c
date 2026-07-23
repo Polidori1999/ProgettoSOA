@@ -4,6 +4,7 @@
 #include <linux/printk.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
+#include "accounting.h"
 
 #include "config.h"
 
@@ -72,9 +73,16 @@ long syscall_throttle_config_enable_monitor(void)
     if (!syscall_throttle_config_is_root())
         return -EPERM;
 
+    /*
+     * Il monitor riparte sempre da una finestra vuota.
+     */
+    syscall_throttle_accounting_reset();
+
     WRITE_ONCE(monitor_enabled, true);
 
-    pr_info("syscall_throttle: monitor attivato\n");
+    pr_info(
+        "syscall_throttle: monitor attivato\n"
+    );
 
     return 0;
 }
@@ -84,9 +92,17 @@ long syscall_throttle_config_disable_monitor(void)
     if (!syscall_throttle_config_is_root())
         return -EPERM;
 
+    /*
+     * Prima impediamo alle nuove callback di entrare
+     * nel percorso di accounting.
+     */
     WRITE_ONCE(monitor_enabled, false);
 
-    pr_info("syscall_throttle: monitor disattivato\n");
+    syscall_throttle_accounting_reset();
+
+    pr_info(
+        "syscall_throttle: monitor disattivato\n"
+    );
 
     return 0;
 }
