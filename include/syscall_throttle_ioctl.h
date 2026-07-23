@@ -126,6 +126,43 @@ struct syscall_throttle_program_list {
          struct syscall_throttle_program_list)
 
 
+/*
+ * Registro dei numeri di syscall.
+ *
+ * Il limite riguarda il numero di syscall che possono
+ * essere contemporaneamente registrate, non il valore
+ * massimo del numero di syscall.
+ */
+#define SYSCALL_THROTTLE_MAX_REGISTERED_SYSCALLS 1024
 
+/*
+ * Snapshot dei numeri di syscall registrati.
+ */
+struct syscall_throttle_syscall_list {
+    __u32 count;
+
+    __u32 numbers[
+        SYSCALL_THROTTLE_MAX_REGISTERED_SYSCALLS
+    ];
+};
+
+/*
+ * Registra un numero di syscall.
+ */
+#define SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL \
+    _IOW(SYSCALL_THROTTLE_IOC_MAGIC, 12, __u32)
+
+/*
+ * Deregistra un numero di syscall.
+ */
+#define SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL \
+    _IOW(SYSCALL_THROTTLE_IOC_MAGIC, 13, __u32)
+
+/*
+ * Restituisce lo snapshot delle syscall registrate.
+ */
+#define SYSCALL_THROTTLE_IOC_GET_SYSCALLS \
+    _IOR(SYSCALL_THROTTLE_IOC_MAGIC, 14, \
+         struct syscall_throttle_syscall_list)
 
 #endif /* SYSCALL_THROTTLE_IOCTL_H */

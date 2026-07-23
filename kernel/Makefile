@@ -6,4 +6,5 @@ syscall_throttle-y := \
     syscall_throttle_main.o \
     config.o \
     uid_registry.o \
-    program_registry.o
+    program_registry.o \
+    syscall_registry.o

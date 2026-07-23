@@ -28,7 +28,13 @@ static void print_usage(const char *program_name)
             "  %s uid-list\n"
             "  %s program-add NOME\n"
             "  %s program-remove NOME\n"
-            "  %s program-list\n",
+            "  %s program-list\n"
+            "  %s syscall-add NUMERO\n"
+            "  %s syscall-remove NUMERO\n"
+            "  %s syscall-list\n",
+            program_name,
+            program_name,
+            program_name,
             program_name,
             program_name,
             program_name,
@@ -43,8 +49,7 @@ static void print_usage(const char *program_name)
             program_name);
 }
 
-static int parse_max(const char *text, __u32 *value)
-{
+static int parse_max(const char *text, __u32 *value) {
     unsigned long parsed;
     char *end;
 
@@ -61,12 +66,11 @@ static int parse_max(const char *text, __u32 *value)
         return -1;
     }
 
-    *value = (__u32)parsed;
+    *value = (__u32) parsed;
     return 0;
 }
 
-static int parse_uid(const char *text, __u32 *value)
-{
+static int parse_uid(const char *text, __u32 *value) {
     unsigned long parsed;
     char *end;
 
@@ -85,14 +89,36 @@ static int parse_uid(const char *text, __u32 *value)
         return -1;
     }
 
-    *value = (__u32)parsed;
+    *value = (__u32) parsed;
+    return 0;
+}
+
+
+static int parse_syscall_number(
+    const char *text,
+    __u32 *value) {
+    unsigned long parsed;
+    char *end;
+
+    errno = 0;
+    end = NULL;
+
+    parsed = strtoul(text, &end, 10);
+
+    if (errno != 0 ||
+        end == text ||
+        *end != '\0' ||
+        parsed > UINT_MAX) {
+        return -1;
+    }
+
+    *value = (__u32) parsed;
     return 0;
 }
 
 static int parse_program_name(
     const char *text,
-    struct syscall_throttle_program *program)
-{
+    struct syscall_throttle_program *program) {
     size_t length;
 
     length = strlen(text);
@@ -116,6 +142,7 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
     struct syscall_throttle_uid_list uid_list;
     struct syscall_throttle_program program;
     struct syscall_throttle_program_list program_list;
+    struct syscall_throttle_syscall_list syscall_list;
     __u32 value;
     __u32 i;
     int fd;
@@ -154,13 +181,22 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
                     "da 1 a 15 caratteri.\n");
             return 1;
         }
+    } else if (strcmp(argv[1], "syscall-add") == 0 ||
+               strcmp(argv[1], "syscall-remove") == 0) {
+        if (argc != 3 ||
+            parse_syscall_number(argv[2], &value) != 0) {
+            fprintf(stderr,
+                    "Errore: numero di syscall non valido.\n");
+            return 1;
+        }
     } else if (strcmp(argv[1], "ping") == 0 ||
                strcmp(argv[1], "get-max") == 0 ||
                strcmp(argv[1], "monitor-on") == 0 ||
                strcmp(argv[1], "monitor-off") == 0 ||
                strcmp(argv[1], "monitor-status") == 0 ||
                strcmp(argv[1], "uid-list") == 0 ||
-               strcmp(argv[1], "program-list") == 0) {
+               strcmp(argv[1], "program-list") == 0 ||
+               strcmp(argv[1], "syscall-list") == 0) {
         if (argc != 2) {
             print_usage(argv[0]);
             return 1;
@@ -280,7 +316,7 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
             printf("Programma '%s' registrato.\n",
                    program.name);
         }
-    } else if (strcmp(argv[1], "program-remove") == 0) {
+        } else if (strcmp(argv[1], "program-remove") == 0) {
         if (ioctl(fd,
                   SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM,
                   &program) == -1) {
@@ -290,6 +326,7 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
             printf("Programma '%s' deregistrato.\n",
                    program.name);
         }
+
     } else if (strcmp(argv[1], "program-list") == 0) {
         if (ioctl(fd,
                   SYSCALL_THROTTLE_IOC_GET_PROGRAMS,
@@ -306,6 +343,46 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
                 for (i = 0; i < program_list.count; ++i) {
                     printf("  %s\n",
                            program_list.programs[i].name);
+                }
+            }
+        }
+
+    } else if (strcmp(argv[1], "syscall-add") == 0) {
+        if (ioctl(fd,
+                  SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL,
+                  &value) == -1) {
+            perror("ioctl REGISTER_SYSCALL fallito");
+            status = 1;
+        } else {
+            printf("Syscall %u registrata.\n", value);
+        }
+
+    } else if (strcmp(argv[1], "syscall-remove") == 0) {
+        if (ioctl(fd,
+                  SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL,
+                  &value) == -1) {
+            perror("ioctl UNREGISTER_SYSCALL fallito");
+            status = 1;
+        } else {
+            printf("Syscall %u deregistrata.\n", value);
+        }
+
+    } else if (strcmp(argv[1], "syscall-list") == 0) {
+        if (ioctl(fd,
+                  SYSCALL_THROTTLE_IOC_GET_SYSCALLS,
+                  &syscall_list) == -1) {
+            perror("ioctl GET_SYSCALLS fallito");
+            status = 1;
+        } else {
+            printf("Syscall registrate: %u\n",
+                   syscall_list.count);
+
+            if (syscall_list.count == 0) {
+                printf("  nessuna\n");
+            } else {
+                for (i = 0; i < syscall_list.count; ++i) {
+                    printf("  %u\n",
+                           syscall_list.numbers[i]);
                 }
             }
         }
