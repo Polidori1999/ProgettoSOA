@@ -7,4 +7,5 @@ syscall_throttle-y := \
     config.o \
     uid_registry.o \
     program_registry.o \
-    syscall_registry.o
+    syscall_registry.o \
+    monitor.o
