@@ -1,4 +1,5 @@
 ccflags-y += -I$(src)/../include
+ccflags-y += -I$(src)/include
 
 obj-m := syscall_throttle.o
 
