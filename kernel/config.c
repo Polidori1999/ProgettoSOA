@@ -5,6 +5,9 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 #include "accounting.h"
+#include "access_control.h"
+#include "accounting.h"
+#include "config.h"
 
 #include "config.h"
 
@@ -17,14 +20,7 @@
 static __u32 max_syscalls_per_second = 1000;
 static bool monitor_enabled;
 
-/*
- * Verifica che l'effective UID del thread chiamante
- * corrisponda all'UID root.
- */
-static bool syscall_throttle_config_is_root(void)
-{
-    return uid_eq(current_euid(), GLOBAL_ROOT_UID);
-}
+
 
 long syscall_throttle_config_set_max(unsigned long arg)
 {
@@ -34,7 +30,7 @@ long syscall_throttle_config_set_max(unsigned long arg)
      * SET_MAX modifica la configurazione ed è quindi
      * riservato a effective UID 0.
      */
-    if (!syscall_throttle_config_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     if (copy_from_user(&value,
@@ -70,7 +66,7 @@ long syscall_throttle_config_get_max(unsigned long arg)
 
 long syscall_throttle_config_enable_monitor(void)
 {
-    if (!syscall_throttle_config_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     /*
@@ -89,7 +85,7 @@ long syscall_throttle_config_enable_monitor(void)
 
 long syscall_throttle_config_disable_monitor(void)
 {
-    if (!syscall_throttle_config_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     /*

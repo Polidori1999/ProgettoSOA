@@ -7,6 +7,8 @@
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
+#include "access_control.h"
+#include "program_registry.h"
 
 #include <syscall_throttle_ioctl.h>
 
@@ -40,10 +42,7 @@ static struct syscall_throttle_program_snapshot __rcu
  */
 static DEFINE_MUTEX(program_update_lock);
 
-static bool syscall_throttle_program_is_root(void)
-{
-    return uid_eq(current_euid(), GLOBAL_ROOT_UID);
-}
+
 
 static int syscall_throttle_program_validate(
     const struct syscall_throttle_program *program)
@@ -125,7 +124,7 @@ long syscall_throttle_program_register(unsigned long arg)
     struct syscall_throttle_program program;
     int result;
 
-    if (!syscall_throttle_program_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     result = syscall_throttle_program_copy_from_user(
@@ -217,7 +216,7 @@ long syscall_throttle_program_unregister(unsigned long arg)
     int found_index;
     int result;
 
-    if (!syscall_throttle_program_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     result = syscall_throttle_program_copy_from_user(

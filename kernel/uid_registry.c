@@ -8,6 +8,8 @@
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
 #include <linux/user_namespace.h>
+#include "access_control.h"
+#include "uid_registry.h"
 
 #include <syscall_throttle_ioctl.h>
 
@@ -44,10 +46,7 @@ static struct syscall_throttle_uid_snapshot __rcu
  */
 static DEFINE_MUTEX(uid_update_lock);
 
-static bool syscall_throttle_uid_is_root(void)
-{
-    return uid_eq(current_euid(), GLOBAL_ROOT_UID);
-}
+
 
 static int syscall_throttle_uid_find(
     const struct syscall_throttle_uid_snapshot *snapshot,
@@ -88,7 +87,7 @@ long syscall_throttle_uid_register(unsigned long arg)
     kuid_t uid;
     long result;
 
-    if (!syscall_throttle_uid_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     if (copy_from_user(&raw_uid,
@@ -178,7 +177,7 @@ long syscall_throttle_uid_unregister(unsigned long arg)
     int found_index;
     long result;
 
-    if (!syscall_throttle_uid_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     if (copy_from_user(&raw_uid,

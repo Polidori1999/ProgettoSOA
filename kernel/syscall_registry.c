@@ -9,6 +9,8 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
+#include "access_control.h"
+#include "syscall_registry.h"
 
 #include <syscall_throttle_ioctl.h>
 
@@ -31,10 +33,6 @@ static __u32 registered_syscall_count;
  */
 static DEFINE_MUTEX(registered_syscalls_lock);
 
-static bool syscall_throttle_syscall_is_root(void)
-{
-    return uid_eq(current_euid(), GLOBAL_ROOT_UID);
-}
 
 static bool syscall_throttle_syscall_number_valid(__u32 syscall_nr)
 {
@@ -46,7 +44,7 @@ long syscall_throttle_syscall_register(unsigned long arg)
     __u32 syscall_nr;
     long result;
 
-    if (!syscall_throttle_syscall_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     if (copy_from_user(&syscall_nr,
@@ -91,7 +89,7 @@ long syscall_throttle_syscall_unregister(unsigned long arg)
     __u32 syscall_nr;
     long result;
 
-    if (!syscall_throttle_syscall_is_root())
+    if (!syscall_throttle_is_root())
         return -EPERM;
 
     if (copy_from_user(&syscall_nr,
