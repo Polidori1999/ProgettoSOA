@@ -1,38 +1,58 @@
+#include <asm/syscall.h>
+#include <asm/unistd.h>
+
+#include <linux/atomic.h>
 #include <linux/errno.h>
 #include <linux/kprobes.h>
-#include <linux/module.h>
 #include <linux/printk.h>
+#include <linux/ptrace.h>
 #include <linux/types.h>
+#include <linux/wait.h>
 
 #include "dispatcher_hook.h"
 
 /*
- * Firma di kallsyms_lookup_name():
+ * Firma della funzione kernel non esportata:
  *
  * unsigned long kallsyms_lookup_name(const char *name);
- *
- * Non possiamo richiamarla direttamente perché non è
- * esportata ai moduli. Ne ricaviamo l'indirizzo tramite
- * una kprobe temporanea.
  */
 typedef unsigned long (*kallsyms_lookup_name_fn)(
     const char *name
 );
 
 /*
- * Indirizzi che verranno usati nelle prossime fasi.
+ * Tabella delle syscall native x86-64.
  *
- * Per ora vengono soltanto risolti e stampati.
+ * sys_call_ptr_t è definito da <asm/syscall.h> come:
+ *
+ * long (*)(const struct pt_regs *);
  */
-static unsigned long x64_sys_call_address;
-static unsigned long sys_call_table_address;
+static const sys_call_ptr_t *resolved_sys_call_table;
 
 /*
- * Recupera l'indirizzo di kallsyms_lookup_name tramite
- * una kprobe temporanea.
+ * Kprobe persistente sul dispatcher x86-64.
+ */
+static struct kprobe dispatcher_probe;
+
+/*
+ * Indica se la Kprobe è stata registrata.
+ */
+static bool dispatcher_probe_registered;
+
+/*
+ * Numero di esecuzioni già redirette verso il nostro
+ * dispatcher e non ancora completate.
  *
- * La probe viene rimossa immediatamente: non resta attiva
- * durante l'esecuzione delle syscall.
+ * Serve a impedire che l'unload termini mentre una CPU
+ * sta ancora eseguendo codice del modulo.
+ */
+static atomic_t active_dispatchers = ATOMIC_INIT(0);
+
+static DECLARE_WAIT_QUEUE_HEAD(dispatcher_wait_queue);
+
+/*
+ * Recupera kallsyms_lookup_name attraverso una Kprobe
+ * temporanea.
  */
 static int syscall_throttle_find_kallsyms_lookup_name(
     kallsyms_lookup_name_fn *lookup_name)
@@ -51,25 +71,18 @@ static int syscall_throttle_find_kallsyms_lookup_name(
     ret = register_kprobe(&lookup_probe);
     if (ret != 0) {
         pr_err(
-            "syscall_throttle: impossibile risolvere "
-            "kallsyms_lookup_name tramite kprobe: %d\n",
+            "syscall_throttle: risoluzione di "
+            "kallsyms_lookup_name fallita: %d\n",
             ret
         );
 
         return ret;
     }
 
-    /*
-     * Dopo register_kprobe(), addr contiene l'indirizzo
-     * del simbolo indicato in symbol_name.
-     */
     *lookup_name =
         (kallsyms_lookup_name_fn)
         (unsigned long)lookup_probe.addr;
 
-    /*
-     * La kprobe serviva soltanto per ottenere l'indirizzo.
-     */
     unregister_kprobe(&lookup_probe);
 
     if (*lookup_name == NULL) {
@@ -84,13 +97,136 @@ static int syscall_throttle_find_kallsyms_lookup_name(
     return 0;
 }
 
+/*
+ * Dispatcher trasparente.
+ *
+ * In M4.3a viene raggiunto soltanto per getpid.
+ * Non applica ancora matching, accounting o attesa.
+ */
+static long syscall_throttle_dispatch(
+    const struct pt_regs *syscall_regs,
+    unsigned int syscall_nr)
+{
+    sys_call_ptr_t syscall_function;
+    long result;
+
+    result = -ENOSYS;
+
+    if (unlikely(resolved_sys_call_table == NULL))
+        goto completed;
+
+    if (unlikely(syscall_nr >= NR_syscalls))
+        goto completed;
+
+    syscall_function =
+        resolved_sys_call_table[syscall_nr];
+
+    if (unlikely(syscall_function == NULL))
+        goto completed;
+
+    /*
+     * Esegue il wrapper originale, per esempio
+     * __x64_sys_getpid(regs).
+     */
+    result = syscall_function(syscall_regs);
+
+completed:
+    /*
+     * Segnala al cleanup che questa esecuzione non
+     * utilizza più codice del dispatcher.
+     */
+    if (atomic_dec_and_test(&active_dispatchers))
+        wake_up(&dispatcher_wait_queue);
+
+    return result;
+}
+
+/*
+ * Impedisce che il dispatcher venga scelto come
+ * probepoint da altre Kprobe.
+ */
+NOKPROBE_SYMBOL(syscall_throttle_dispatch);
+
+/*
+ * Handler atomico della Kprobe.
+ *
+ * Per ora redirige soltanto getpid. Su x86-64 il secondo
+ * argomento di x64_sys_call(), cioè syscall_nr, si trova
+ * nel registro RSI rappresentato da regs->si.
+ */
+static int syscall_throttle_dispatch_pre_handler(
+    struct kprobe *probe,
+    struct pt_regs *registers)
+{
+    unsigned int syscall_nr;
+
+    (void)probe;
+
+    syscall_nr = (unsigned int)registers->si;
+
+    /*
+     * Tutte le altre syscall seguono ancora il
+     * dispatcher originale del kernel.
+     */
+    if (syscall_nr != __NR_getpid)
+        return 0;
+
+    /*
+     * Il contatore viene incrementato prima della
+     * redirezione, quindi anche una CPU che non è ancora
+     * entrata nel dispatcher risulta già attiva.
+     */
+    atomic_inc(&active_dispatchers);
+
+    /*
+     * Cambia esclusivamente il punto di ripresa.
+     * Gli argomenti e il return address restano quelli
+     * della chiamata originale a x64_sys_call().
+     */
+    registers->ip =
+        (unsigned long)syscall_throttle_dispatch;
+
+    /*
+     * Impedisce a Kprobes di eseguire in single-step
+     * l'istruzione originale.
+     */
+    return 1;
+}
+
+NOKPROBE_SYMBOL(
+    syscall_throttle_dispatch_pre_handler
+);
+
+/*
+ * Handler intenzionalmente vuoto.
+ *
+ * La sua presenza impedisce che la Kprobe venga
+ * trasformata in una optprobe, perché una optprobe
+ * ignorerebbe la modifica di registers->ip.
+ */
+static void syscall_throttle_dispatch_post_handler(
+    struct kprobe *probe,
+    struct pt_regs *registers,
+    unsigned long flags)
+{
+    (void)probe;
+    (void)registers;
+    (void)flags;
+}
+
+NOKPROBE_SYMBOL(
+    syscall_throttle_dispatch_post_handler
+);
+
 int syscall_throttle_dispatcher_hook_init(void)
 {
     kallsyms_lookup_name_fn lookup_name;
+    unsigned long table_address;
     int ret;
 
-    x64_sys_call_address = 0;
-    sys_call_table_address = 0;
+    resolved_sys_call_table = NULL;
+    dispatcher_probe_registered = false;
+    atomic_set(&active_dispatchers, 0);
 
     ret = syscall_throttle_find_kallsyms_lookup_name(
         &lookup_name
@@ -99,57 +235,59 @@ int syscall_throttle_dispatcher_hook_init(void)
     if (ret != 0)
         return ret;
 
+    table_address = lookup_name("sys_call_table");
+    if (table_address == 0) {
+        pr_err(
+            "syscall_throttle: sys_call_table "
+            "non trovata\n"
+        );
+
+        return -ENOENT;
+    }
+
+    resolved_sys_call_table =
+        (const sys_call_ptr_t *)table_address;
+
+    dispatcher_probe.symbol_name = "x64_sys_call";
+    dispatcher_probe.pre_handler =
+        syscall_throttle_dispatch_pre_handler;
+    dispatcher_probe.post_handler =
+        syscall_throttle_dispatch_post_handler;
+
     /*
-     * Risoluzione del dispatcher x86-64 e della tabella
-     * delle syscall.
+     * La tabella deve essere pronta prima di rendere
+     * attiva la redirezione.
      */
-    x64_sys_call_address =
-        lookup_name("x64_sys_call");
-
-    sys_call_table_address =
-        lookup_name("sys_call_table");
-
-    if (x64_sys_call_address == 0) {
+    ret = register_kprobe(&dispatcher_probe);
+    if (ret != 0) {
         pr_err(
-            "syscall_throttle: simbolo "
-            "x64_sys_call non trovato\n"
+            "syscall_throttle: registrazione Kprobe "
+            "su x64_sys_call fallita: %d\n",
+            ret
         );
 
-        return -ENOENT;
+        resolved_sys_call_table = NULL;
+
+        return ret;
     }
 
-    if (sys_call_table_address == 0) {
-        pr_err(
-            "syscall_throttle: simbolo "
-            "sys_call_table non trovato\n"
-        );
-
-        x64_sys_call_address = 0;
-
-        return -ENOENT;
-    }
-
-    pr_info(
-        "syscall_throttle: address discovery completata\n"
-    );
-
-    pr_info(
-        "syscall_throttle: x64_sys_call=%px\n",
-        (void *)x64_sys_call_address
-    );
+    dispatcher_probe_registered = true;
 
     pr_info(
         "syscall_throttle: sys_call_table=%px\n",
-        (void *)sys_call_table_address
+        resolved_sys_call_table
     );
 
-    /*
-     * In questa milestone non modifichiamo alcun byte
-     * del kernel.
-     */
     pr_info(
-        "syscall_throttle: dispatcher hook non ancora "
-        "installato\n"
+        "syscall_throttle: Kprobe x64_sys_call "
+        "registrata, address=%px\n",
+        dispatcher_probe.addr
+    );
+
+    pr_info(
+        "syscall_throttle: redirect trasparente "
+        "attivo solo per getpid, syscall=%d\n",
+        __NR_getpid
     );
 
     return 0;
@@ -158,15 +296,25 @@ int syscall_throttle_dispatcher_hook_init(void)
 void syscall_throttle_dispatcher_hook_exit(void)
 {
     /*
-     * Non esiste ancora alcuna patch da ripristinare.
-     * Azzeriamo gli indirizzi per rendere esplicito che
-     * non devono più essere utilizzati.
+     * Prima impedisce nuove redirezioni.
      */
-    x64_sys_call_address = 0;
-    sys_call_table_address = 0;
+    if (dispatcher_probe_registered) {
+        unregister_kprobe(&dispatcher_probe);
+        dispatcher_probe_registered = false;
+    }
+
+    /*
+     * Poi aspetta le getpid già redirette.
+     */
+    wait_event(
+        dispatcher_wait_queue,
+        atomic_read(&active_dispatchers) == 0
+    );
+
+    resolved_sys_call_table = NULL;
 
     pr_info(
-        "syscall_throttle: dispatcher hook cleanup "
-        "completato\n"
+        "syscall_throttle: redirect dispatcher "
+        "rimosso\n"
     );
 }
