@@ -13,65 +13,65 @@
 #include "program_registry.h"
 #include "syscall_registry.h"
 #include "uid_registry.h"
+#include "throttle_engine.h"
 
 static long syscall_throttle_ioctl(
     struct file *file,
     unsigned int cmd,
-    unsigned long arg)
-{
-    (void)file;
+    unsigned long arg) {
+    (void) file;
 
     if (_IOC_TYPE(cmd) != SYSCALL_THROTTLE_IOC_MAGIC)
         return -ENOTTY;
 
     switch (cmd) {
-    case SYSCALL_THROTTLE_IOC_PING:
-        return 0;
+        case SYSCALL_THROTTLE_IOC_PING:
+            return 0;
 
-    case SYSCALL_THROTTLE_IOC_SET_MAX:
-        return syscall_throttle_config_set_max(arg);
+        case SYSCALL_THROTTLE_IOC_SET_MAX:
+            return syscall_throttle_config_set_max(arg);
 
-    case SYSCALL_THROTTLE_IOC_GET_MAX:
-        return syscall_throttle_config_get_max(arg);
+        case SYSCALL_THROTTLE_IOC_GET_MAX:
+            return syscall_throttle_config_get_max(arg);
 
-    case SYSCALL_THROTTLE_IOC_ENABLE_MONITOR:
-        return syscall_throttle_config_enable_monitor();
+        case SYSCALL_THROTTLE_IOC_ENABLE_MONITOR:
+            return syscall_throttle_config_enable_monitor();
 
-    case SYSCALL_THROTTLE_IOC_DISABLE_MONITOR:
-        return syscall_throttle_config_disable_monitor();
+        case SYSCALL_THROTTLE_IOC_DISABLE_MONITOR:
+            return syscall_throttle_config_disable_monitor();
 
-    case SYSCALL_THROTTLE_IOC_GET_MONITOR:
-        return syscall_throttle_config_get_monitor(arg);
+        case SYSCALL_THROTTLE_IOC_GET_MONITOR:
+            return syscall_throttle_config_get_monitor(arg);
 
-    case SYSCALL_THROTTLE_IOC_REGISTER_UID:
-        return syscall_throttle_uid_register(arg);
+        case SYSCALL_THROTTLE_IOC_REGISTER_UID:
+            return syscall_throttle_uid_register(arg);
 
-    case SYSCALL_THROTTLE_IOC_UNREGISTER_UID:
-        return syscall_throttle_uid_unregister(arg);
+        case SYSCALL_THROTTLE_IOC_UNREGISTER_UID:
+            return syscall_throttle_uid_unregister(arg);
 
-    case SYSCALL_THROTTLE_IOC_GET_UIDS:
-        return syscall_throttle_uid_get_list(arg);
+        case SYSCALL_THROTTLE_IOC_GET_UIDS:
+            return syscall_throttle_uid_get_list(arg);
 
-    case SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM:
-        return syscall_throttle_program_register(arg);
+        case SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM:
+            return syscall_throttle_program_register(arg);
 
-    case SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM:
-        return syscall_throttle_program_unregister(arg);
+        case SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM:
+            return syscall_throttle_program_unregister(arg);
 
-    case SYSCALL_THROTTLE_IOC_GET_PROGRAMS:
-        return syscall_throttle_program_get_list(arg);
+        case SYSCALL_THROTTLE_IOC_GET_PROGRAMS:
+            return syscall_throttle_program_get_list(arg);
 
-    case SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL:
-        return syscall_throttle_syscall_register(arg);
+        case SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL:
+            return syscall_throttle_syscall_register(arg);
 
-    case SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL:
-        return syscall_throttle_syscall_unregister(arg);
+        case SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL:
+            return syscall_throttle_syscall_unregister(arg);
 
-    case SYSCALL_THROTTLE_IOC_GET_SYSCALLS:
-        return syscall_throttle_syscall_get_list(arg);
+        case SYSCALL_THROTTLE_IOC_GET_SYSCALLS:
+            return syscall_throttle_syscall_get_list(arg);
 
-    default:
-        return -ENOTTY;
+        default:
+            return -ENOTTY;
     }
 }
 
@@ -87,8 +87,7 @@ static struct miscdevice syscall_throttle_device = {
     .mode = 0666,
 };
 
-static int __init syscall_throttle_init(void)
-{
+static int __init syscall_throttle_init(void) {
     int ret;
 
     ret = misc_register(&syscall_throttle_device);
@@ -129,18 +128,23 @@ static int __init syscall_throttle_init(void)
 
     return 0;
 
-    error_device:
-        misc_deregister(&syscall_throttle_device);
+error_device:
+    misc_deregister(&syscall_throttle_device);
 
     return ret;
 }
 
-static void __exit syscall_throttle_exit(void)
-{
+static void __exit syscall_throttle_exit(void) {
     /*
      * Impedisce nuove operazioni di configurazione.
      */
     misc_deregister(&syscall_throttle_device);
+
+    /*
+     * Impedisce ai dispatcher già entrati di iniziare
+     * o continuare un'attesa.
+     */
+    syscall_throttle_engine_shutdown();
 
     /*
      * Rimuove la Kprobe e aspetta i dispatcher
@@ -155,12 +159,17 @@ static void __exit syscall_throttle_exit(void)
     syscall_throttle_program_registry_cleanup();
     syscall_throttle_uid_registry_cleanup();
 
-    pr_info("syscall_throttle: device deregistrato\n");
+    pr_info(
+        "syscall_throttle: device deregistrato\n"
+    );
 }
 
 module_init(syscall_throttle_init);
+
 module_exit(syscall_throttle_exit);
 
 MODULE_LICENSE("GPL");
+
 MODULE_AUTHOR("Leonardo Polidori");
+
 MODULE_DESCRIPTION("Linux kernel module for syscall throttling");

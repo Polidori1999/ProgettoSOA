@@ -42,9 +42,50 @@ struct syscall_throttle_decision {
  *
  * La funzione non dorme e non alloca memoria.
  */
+/*
+ * Verifica se la syscall corrente è sottoposta al
+ * monitoraggio e aggiorna l'accounting.
+ */
 bool syscall_throttle_engine_evaluate(
     long syscall_id,
     struct syscall_throttle_decision *decision
 );
 
-#endif
+
+/*
+ * Applica il controllo completo alla syscall corrente.
+ *
+ * Restituisce:
+ *
+ *  1:
+ *      syscall controllata e ammessa;
+ *
+ *  0:
+ *      syscall non controllata, monitor disattivato
+ *      oppure motore in shutdown;
+ *
+ * -ERESTARTSYS:
+ *      attesa interrotta da un segnale.
+ *
+ * Quando la finestra è piena, la funzione sospende il
+ * task fino alla sua scadenza e ripete l'accounting.
+ */
+int syscall_throttle_engine_enforce(
+    long syscall_id,
+    struct syscall_throttle_decision *decision
+);
+
+
+/*
+ * Risveglia i thread quando il monitor viene
+ * disattivato.
+ */
+void syscall_throttle_engine_monitor_disabled(void);
+
+/*
+ * Impedisce nuove attese e risveglia i thread durante
+ * la rimozione del modulo.
+ */
+void syscall_throttle_engine_shutdown(void);
+
+#endif /* SYSCALL_THROTTLE_ENGINE_H */

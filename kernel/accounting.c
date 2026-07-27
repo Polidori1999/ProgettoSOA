@@ -55,15 +55,13 @@ void syscall_throttle_accounting_record(
     struct syscall_throttle_accounting_result *result)
 {
     unsigned long flags;
+    u64 window_end_ns;
     u64 now_ns;
     bool new_window;
 
     if (result == NULL)
         return;
 
-    /*
-     * Leggiamo il tempo prima di acquisire il lock.
-     */
     now_ns = ktime_get_ns();
     new_window = false;
 
@@ -73,25 +71,48 @@ void syscall_throttle_accounting_record(
     );
 
     /*
-     * La prima syscall crea una nuova finestra.
+     * La prima richiesta crea una nuova finestra.
      *
-     * Quando è trascorso almeno un secondo, la syscall
-     * corrente diventa il primo evento della nuova
-     * finestra.
+     * Alla scadenza, la richiesta corrente diventa
+     * la prima candidata della nuova finestra.
      */
     if (window_start_ns == 0 ||
         now_ns - window_start_ns >= NSEC_PER_SEC) {
+
         window_start_ns = now_ns;
         window_count = 0;
         new_window = true;
-    }
+        }
 
-    ++window_count;
+    window_end_ns =
+        window_start_ns + NSEC_PER_SEC;
 
-    result->count = window_count;
     result->max = max;
-    result->exceeded = window_count > max;
     result->new_window = new_window;
+    result->wait_ns = 0;
+
+    /*
+     * Il contatore rappresenta soltanto le syscall
+     * ammesse all'esecuzione nella finestra corrente.
+     */
+    if (window_count < max) {
+        ++window_count;
+
+        result->count = window_count;
+        result->exceeded = false;
+    } else {
+        /*
+         * La syscall non ha ancora ottenuto il diritto
+         * di essere eseguita.
+         */
+        result->count = window_count;
+        result->exceeded = true;
+
+        if (now_ns < window_end_ns) {
+            result->wait_ns =
+                window_end_ns - now_ns;
+        }
+    }
 
     raw_spin_unlock_irqrestore(
         &accounting_lock,

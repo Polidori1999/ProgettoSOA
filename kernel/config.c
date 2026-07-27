@@ -4,12 +4,12 @@
 #include <linux/printk.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
-#include "accounting.h"
+
 #include "access_control.h"
 #include "accounting.h"
 #include "config.h"
+#include "throttle_engine.h"
 
-#include "config.h"
 
 /*
  * Configurazione globale del monitor.
@@ -89,12 +89,21 @@ long syscall_throttle_config_disable_monitor(void)
         return -EPERM;
 
     /*
-     * Prima impediamo alle nuove callback di entrare
+     * Prima impediamo ai nuovi dispatcher di entrare
      * nel percorso di accounting.
      */
     WRITE_ONCE(monitor_enabled, false);
 
+    /*
+     * La prossima attivazione partirà da una finestra
+     * completamente vuota.
+     */
     syscall_throttle_accounting_reset();
+
+    /*
+     * Risveglia tutti i thread eventualmente sospesi.
+     */
+    syscall_throttle_engine_monitor_disabled();
 
     pr_info(
         "syscall_throttle: monitor disattivato\n"

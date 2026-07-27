@@ -9,6 +9,12 @@
 #include <linux/types.h>
 #include <linux/wait.h>
 
+
+
+#include <linux/kernel.h>
+
+
+
 #include <linux/uidgid.h>
 #include <linux/user_namespace.h>
 
@@ -100,11 +106,13 @@ static int syscall_throttle_find_kallsyms_lookup_name(
     return 0;
 }
 
+
 /*
- * Dispatcher trasparente.
+ * Dispatcher delle syscall redirette.
  *
- * In M4.3a viene raggiunto soltanto per getpid.
- * Non applica ancora matching, accounting o attesa.
+ * In M4.6 viene raggiunto soltanto per getpid.
+ * Applica l'enforcement prima di chiamare la syscall
+ * originale.
  */
 static long syscall_throttle_dispatch(
     const struct pt_regs *syscall_regs,
@@ -112,6 +120,7 @@ static long syscall_throttle_dispatch(
 {
     struct syscall_throttle_decision decision;
     sys_call_ptr_t syscall_function;
+    int enforcement_result;
     __u32 visible_uid;
     long result;
 
@@ -130,56 +139,71 @@ static long syscall_throttle_dispatch(
         goto completed;
 
     /*
-     * Il controllo avviene prima dell'esecuzione
-     * effettiva della syscall.
-     *
-     * In questa fase il motore aggiorna soltanto
-     * accounting e decisione: non blocca ancora.
+     * Applica matching, accounting ed eventuale
+     * attesa fino a ottenere un posto nella finestra.
      */
-    if (syscall_throttle_engine_evaluate(
+    enforcement_result =
+        syscall_throttle_engine_enforce(
             syscall_nr,
-            &decision)) {
+            &decision
+        );
 
+    /*
+     * Un segnale può interrompere l'attesa prima che
+     * la syscall originale sia stata eseguita.
+     *
+     * In questo caso restituiamo -ERESTARTSYS al
+     * normale percorso di uscita delle syscall.
+     */
+    if (unlikely(enforcement_result < 0)) {
+        result = enforcement_result;
+        goto completed;
+    }
+
+    /*
+     * Valore maggiore di zero:
+     * la syscall era controllata e ha ottenuto un
+     * posto nella finestra.
+     *
+     * Zero:
+     * monitor spento, nessun matching oppure shutdown.
+     * In tutti questi casi la syscall deve comunque
+     * essere eseguita normalmente.
+     */
+    if (enforcement_result > 0) {
         visible_uid = from_kuid_munged(
             current_user_ns(),
             decision.effective_uid
         );
 
-        /*
-         * Log temporaneo di sviluppo.
-         * Verrà rimosso o disabilitato quando il
-         * dispatcher sarà stabilizzato.
-         */
         pr_info_ratelimited(
-            "syscall_throttle: dispatcher syscall=%ld "
+            "syscall_throttle: enforcement syscall=%ld "
             "euid=%u programma='%s' "
-            "count=%u max=%u stato=%s "
+            "count=%u max=%u "
             "uid_match=%u program_match=%u\n",
             decision.syscall_id,
             visible_uid,
             decision.program_name,
             decision.accounting.count,
             decision.accounting.max,
-            decision.accounting.exceeded
-                ? "ECCEDENTE"
-                : "AMMESSA",
             decision.uid_match ? 1U : 0U,
             decision.program_match ? 1U : 0U
         );
-            }
+    }
 
     /*
-     * La syscall reale viene eseguita soltanto dopo
-     * la valutazione del motore.
+     * La syscall originale viene eseguita soltanto
+     * dopo che l'enforcement ha autorizzato il task.
      */
     result = syscall_function(syscall_regs);
 
-    completed:
-        if (atomic_dec_and_test(&active_dispatchers))
-            wake_up(&dispatcher_wait_queue);
+completed:
+    if (atomic_dec_and_test(&active_dispatchers))
+        wake_up(&dispatcher_wait_queue);
 
     return result;
 }
+
 
 /*
  * Impedisce che il dispatcher venga scelto come
