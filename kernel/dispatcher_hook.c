@@ -9,8 +9,11 @@
 #include <linux/types.h>
 #include <linux/wait.h>
 
-#include "dispatcher_hook.h"
+#include <linux/uidgid.h>
+#include <linux/user_namespace.h>
 
+#include "dispatcher_hook.h"
+#include "throttle_engine.h"
 /*
  * Firma della funzione kernel non esportata:
  *
@@ -107,7 +110,9 @@ static long syscall_throttle_dispatch(
     const struct pt_regs *syscall_regs,
     unsigned int syscall_nr)
 {
+    struct syscall_throttle_decision decision;
     sys_call_ptr_t syscall_function;
+    __u32 visible_uid;
     long result;
 
     result = -ENOSYS;
@@ -125,18 +130,53 @@ static long syscall_throttle_dispatch(
         goto completed;
 
     /*
-     * Esegue il wrapper originale, per esempio
-     * __x64_sys_getpid(regs).
+     * Il controllo avviene prima dell'esecuzione
+     * effettiva della syscall.
+     *
+     * In questa fase il motore aggiorna soltanto
+     * accounting e decisione: non blocca ancora.
+     */
+    if (syscall_throttle_engine_evaluate(
+            syscall_nr,
+            &decision)) {
+
+        visible_uid = from_kuid_munged(
+            current_user_ns(),
+            decision.effective_uid
+        );
+
+        /*
+         * Log temporaneo di sviluppo.
+         * Verrà rimosso o disabilitato quando il
+         * dispatcher sarà stabilizzato.
+         */
+        pr_info_ratelimited(
+            "syscall_throttle: dispatcher syscall=%ld "
+            "euid=%u programma='%s' "
+            "count=%u max=%u stato=%s "
+            "uid_match=%u program_match=%u\n",
+            decision.syscall_id,
+            visible_uid,
+            decision.program_name,
+            decision.accounting.count,
+            decision.accounting.max,
+            decision.accounting.exceeded
+                ? "ECCEDENTE"
+                : "AMMESSA",
+            decision.uid_match ? 1U : 0U,
+            decision.program_match ? 1U : 0U
+        );
+            }
+
+    /*
+     * La syscall reale viene eseguita soltanto dopo
+     * la valutazione del motore.
      */
     result = syscall_function(syscall_regs);
 
-completed:
-    /*
-     * Segnala al cleanup che questa esecuzione non
-     * utilizza più codice del dispatcher.
-     */
-    if (atomic_dec_and_test(&active_dispatchers))
-        wake_up(&dispatcher_wait_queue);
+    completed:
+        if (atomic_dec_and_test(&active_dispatchers))
+            wake_up(&dispatcher_wait_queue);
 
     return result;
 }

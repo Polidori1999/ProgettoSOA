@@ -9,7 +9,7 @@
 
 #include "config.h"
 #include "dispatcher_hook.h"
-#include "monitor.h"
+
 #include "program_registry.h"
 #include "syscall_registry.h"
 #include "uid_registry.h"
@@ -94,23 +94,17 @@ static int __init syscall_throttle_init(void)
     ret = misc_register(&syscall_throttle_device);
     if (ret != 0) {
         pr_err(
-            "syscall_throttle: registrazione device fallita: %d\n",
+            "syscall_throttle: registrazione device "
+            "fallita: %d\n",
             ret
         );
 
         return ret;
     }
 
-    ret = syscall_throttle_monitor_init();
-    if (ret != 0) {
-        pr_err(
-            "syscall_throttle: inizializzazione monitor fallita: %d\n",
-            ret
-        );
-
-        goto error_device;
-    }
-
+    /*
+     * Installa la Kprobe sul dispatcher delle syscall.
+     */
     ret = syscall_throttle_dispatcher_hook_init();
     if (ret != 0) {
         pr_err(
@@ -119,7 +113,7 @@ static int __init syscall_throttle_init(void)
             ret
         );
 
-        goto error_monitor;
+        goto error_device;
     }
 
     pr_info(
@@ -135,11 +129,8 @@ static int __init syscall_throttle_init(void)
 
     return 0;
 
-error_monitor:
-    syscall_throttle_monitor_exit();
-
-error_device:
-    misc_deregister(&syscall_throttle_device);
+    error_device:
+        misc_deregister(&syscall_throttle_device);
 
     return ret;
 }
@@ -147,22 +138,20 @@ error_device:
 static void __exit syscall_throttle_exit(void)
 {
     /*
-     * Impedisce l'apertura del device e nuove
-     * operazioni di configurazione.
+     * Impedisce nuove operazioni di configurazione.
      */
     misc_deregister(&syscall_throttle_device);
 
     /*
-     * Il futuro hook deve essere rimosso prima di
-     * distruggere ciò che il dispatcher consulta.
+     * Rimuove la Kprobe e aspetta i dispatcher
+     * già entrati.
      */
     syscall_throttle_dispatcher_hook_exit();
 
     /*
-     * Ferma e sincronizza le callback del tracepoint.
+     * Dopo la rimozione del dispatcher nessun fast
+     * path può più consultare i registri.
      */
-    syscall_throttle_monitor_exit();
-
     syscall_throttle_program_registry_cleanup();
     syscall_throttle_uid_registry_cleanup();
 

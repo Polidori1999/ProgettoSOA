@@ -11,5 +11,4 @@ syscall_throttle-y := \
     syscall_registry.o \
     accounting.o \
     throttle_engine.o \
-    monitor.o \
     dispatcher_hook.o
