@@ -3,6 +3,7 @@
 #include <linux/bitmap.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
+#include <linux/kprobes.h>
 #include <linux/mutex.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
@@ -14,7 +15,6 @@
 
 #include <syscall_throttle_ioctl.h>
 
-#include "syscall_registry.h"
 
 /*
  * Bitmap delle syscall registrate.
@@ -55,6 +55,18 @@ long syscall_throttle_syscall_register(unsigned long arg)
 
     if (!syscall_throttle_syscall_number_valid(syscall_nr))
         return -EINVAL;
+
+    /*
+     * active_dispatchers viene decrementato soltanto
+     * dopo il ritorno della syscall originale.
+     *
+     * exit ed exit_group non ritornano e impedirebbero
+     * quindi il completamento sicuro dell'unload.
+     */
+    if (syscall_nr == __NR_exit ||
+        syscall_nr == __NR_exit_group) {
+        return -EOPNOTSUPP;
+    }
 
     result = 0;
 
@@ -178,10 +190,12 @@ bool syscall_throttle_syscall_matches(unsigned int syscall_nr)
 {
     /*
      * test_bit permette una lettura molto rapida.
-     * Questa funzione verrà usata dal monitor reale.
+     * La funzione è invocata dal pre-handler Kprobe.
      */
     if (syscall_nr >= NR_syscalls)
         return false;
 
     return test_bit(syscall_nr, registered_syscalls);
 }
+
+NOKPROBE_SYMBOL(syscall_throttle_syscall_matches);
