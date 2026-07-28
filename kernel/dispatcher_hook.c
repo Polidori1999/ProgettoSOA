@@ -19,6 +19,7 @@
 #include <linux/user_namespace.h>
 
 #include "dispatcher_hook.h"
+#include "syscall_registry.h"
 #include "throttle_engine.h"
 /*
  * Firma della funzione kernel non esportata:
@@ -110,7 +111,7 @@ static int syscall_throttle_find_kallsyms_lookup_name(
 /*
  * Dispatcher delle syscall redirette.
  *
- * In M4.6 viene raggiunto soltanto per getpid.
+ * Viene raggiunto per le syscall registrate.
  * Applica l'enforcement prima di chiamare la syscall
  * originale.
  */
@@ -214,9 +215,9 @@ NOKPROBE_SYMBOL(syscall_throttle_dispatch);
 /*
  * Handler atomico della Kprobe.
  *
- * Per ora redirige soltanto getpid. Su x86-64 il secondo
- * argomento di x64_sys_call(), cioè syscall_nr, si trova
- * nel registro RSI rappresentato da regs->si.
+ * Su x86-64 il secondo argomento di x64_sys_call(),
+ * cioè syscall_nr, si trova nel registro RSI
+ * rappresentato da registers->si.
  */
 static int syscall_throttle_dispatch_pre_handler(
     struct kprobe *probe,
@@ -229,10 +230,10 @@ static int syscall_throttle_dispatch_pre_handler(
     syscall_nr = (unsigned int)registers->si;
 
     /*
-     * Tutte le altre syscall seguono ancora il
+     * Le syscall non registrate continuano nel
      * dispatcher originale del kernel.
      */
-    if (syscall_nr != __NR_getpid)
+    if (!syscall_throttle_syscall_matches(syscall_nr))
         return 0;
 
     /*
@@ -350,8 +351,7 @@ int syscall_throttle_dispatcher_hook_init(void)
 
     pr_info(
         "syscall_throttle: redirect trasparente "
-        "attivo solo per getpid, syscall=%d\n",
-        __NR_getpid
+        "attivo per le syscall registrate\n"
     );
 
     return 0;
@@ -368,7 +368,7 @@ void syscall_throttle_dispatcher_hook_exit(void)
     }
 
     /*
-     * Poi aspetta le getpid già redirette.
+     * Poi aspetta le syscall già redirette.
      */
     wait_event(
         dispatcher_wait_queue,
