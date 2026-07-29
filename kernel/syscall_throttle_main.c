@@ -4,6 +4,7 @@
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/printk.h>
+#include "statistics.h"
 
 #include <syscall_throttle_ioctl.h>
 
@@ -69,6 +70,10 @@ static long syscall_throttle_ioctl(
 
         case SYSCALL_THROTTLE_IOC_GET_SYSCALLS:
             return syscall_throttle_syscall_get_list(arg);
+
+
+        case SYSCALL_THROTTLE_IOC_GET_STATS:
+            return syscall_throttle_statistics_get(arg);
 
         default:
             return -ENOTTY;
