@@ -9,6 +9,7 @@
 #include <linux/compiler.h>
 #include <linux/wait.h>
 
+#include "statistics.h"
 #include <linux/hrtimer.h>
 #include <linux/ktime.h>
 
@@ -133,6 +134,13 @@ int syscall_throttle_engine_enforce(
     s64 observed_generation;
     long wait_result;
 
+    bool task_blocked = false;
+    u64 blocked_since_ns = 0;
+    kuid_t blocked_uid = KUIDT_INIT(0);
+    char blocked_program[TASK_COMM_LEN] = {0};
+
+    int result;
+
     if (decision == NULL)
         return -EINVAL;
 
@@ -152,8 +160,10 @@ int syscall_throttle_engine_enforce(
          * Durante l'unload nessun dispatcher deve
          * iniziare una nuova attesa.
          */
-        if (READ_ONCE(engine_shutting_down))
-            return 0;
+        if (READ_ONCE(engine_shutting_down)) {
+            result = 0;
+            goto out;
+        }
 
         /*
          * Esegue matching e prova a riservare un posto
@@ -162,37 +172,64 @@ int syscall_throttle_engine_enforce(
         if (!syscall_throttle_engine_evaluate(
                 syscall_id,
                 decision)) {
-            return 0;
+            result = 0;
+            goto out;
         }
 
         /*
          * La syscall ha ottenuto un posto e può essere
          * eseguita.
          */
-        if (!decision->accounting.exceeded)
-            return 1;
+        if (!decision->accounting.exceeded) {
+            result = 1;
+            goto out;
+        }
 
         /*
          * Un monitor-off potrebbe essere avvenuto tra
          * la lettura della generazione e l'accounting.
-         *
-         * In tal caso la syscall deve passare senza
-         * rimanere in attesa.
          */
         if (READ_ONCE(engine_shutting_down) ||
             !syscall_throttle_config_monitor_enabled() ||
             atomic64_read(&control_generation) !=
                 observed_generation) {
-            return 0;
+
+            result = 0;
+            goto out;
         }
 
         /*
-         * Normalmente wait_ns è maggiore di zero per
-         * una finestra piena. In caso di scadenza
-         * contemporanea, ripetiamo subito l'accounting.
+         * In caso di scadenza contemporanea della
+         * finestra ripetiamo immediatamente l'accounting,
+         * senza considerare il task realmente bloccato.
          */
         if (decision->accounting.wait_ns == 0)
             continue;
+
+        /*
+         * Il task entra nello stato statisticamente
+         * bloccato soltanto prima della prima attesa
+         * effettiva.
+         *
+         * Se perde la contesa nella finestra successiva
+         * e deve attendere ancora, non viene contato una
+         * seconda volta.
+         */
+        if (!task_blocked) {
+            blocked_uid =
+                decision->effective_uid;
+
+            strscpy(
+                blocked_program,
+                decision->program_name,
+                sizeof(blocked_program)
+            );
+
+            blocked_since_ns =
+                syscall_throttle_statistics_block_enter();
+
+            task_blocked = true;
+        }
 
         /*
          * Il task resta in TASK_INTERRUPTIBLE fino a:
@@ -215,57 +252,65 @@ int syscall_throttle_engine_enforce(
             );
 
         /*
-         * La syscall non è ancora stata eseguita.
-         * Restituendo -ERESTARTSYS permettiamo al
-         * normale percorso syscall di gestire il
-         * segnale ed eventualmente riavviare la
-         * chiamata.
+         * La syscall originale non viene eseguita per
+         * questa specifica invocazione.
          */
-        if (wait_result == -ERESTARTSYS)
-            return -ERESTARTSYS;
+        if (wait_result == -ERESTARTSYS) {
+            result = -ERESTARTSYS;
+            goto out;
+        }
 
         /*
-         * Monitor-off e shutdown liberano
-         * immediatamente il task.
-         *
-         * Il confronto della generazione gestisce
-         * anche monitor-off seguito rapidamente da
-         * monitor-on.
+         * Monitor-off e shutdown liberano il task e
+         * permettono alla syscall originale di passare.
          */
         if (READ_ONCE(engine_shutting_down) ||
             !syscall_throttle_config_monitor_enabled() ||
             atomic64_read(&control_generation) !=
                 observed_generation) {
-            return 0;
+
+            result = 0;
+            goto out;
         }
 
         /*
-         * -ETIME indica che il timeout è scaduto.
-         *
-         * Torniamo all'inizio e proviamo a riservare
-         * un posto nella nuova finestra. Se molti task
-         * si risvegliano insieme, soltanto i primi MAX
-         * saranno ammessi; gli altri attenderanno
-         * ancora.
+         * Alla scadenza del timeout il task ripete
+         * l'accounting.
          */
         if (wait_result == -ETIME)
             continue;
 
         /*
-         * Con la condizione usata sopra, zero indica
-         * normalmente un risveglio dovuto a una
-         * variazione del control plane. Per robustezza
-         * ripetiamo comunque la valutazione.
+         * Per robustezza, un risveglio senza errore
+         * provoca una nuova valutazione.
          */
         if (wait_result == 0)
             continue;
 
         /*
-         * Protezione da eventuali valori negativi non
-         * previsti.
+         * Protezione da valori inattesi.
          */
-        return (int)wait_result;
+        result = (int)wait_result;
+        goto out;
     }
+
+out:
+    /*
+     * Uscita unica dallo stato bloccato.
+     *
+     * result >= 0 significa che il dispatcher eseguirà
+     * comunque la syscall originale.
+     */
+    if (task_blocked) {
+        syscall_throttle_statistics_block_exit(
+            blocked_since_ns,
+            result >= 0,
+            blocked_uid,
+            blocked_program
+        );
+    }
+
+    return result;
 }
 
 
