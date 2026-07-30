@@ -6,6 +6,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 #include "controller.h"
 
@@ -15,38 +16,29 @@
 
 static void print_usage(const char *program_name)
 {
-    fprintf(stderr,
-            "Uso:\n"
-            "  %s ping\n"
-            "  %s get-max\n"
-            "  %s set-max NUMERO\n"
-            "  %s monitor-on\n"
-            "  %s monitor-off\n"
-            "  %s monitor-status\n"
-            "  %s uid-add UID\n"
-            "  %s uid-remove UID\n"
-            "  %s uid-list\n"
-            "  %s program-add NOME\n"
-            "  %s program-remove NOME\n"
-            "  %s program-list\n"
-            "  %s syscall-add NUMERO\n"
-            "  %s syscall-remove NUMERO\n"
-            "  %s syscall-list\n",
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name,
-            program_name);
+    fprintf(stderr, "Uso:\n");
+
+    fprintf(stderr, "  %s ping\n", program_name);
+    fprintf(stderr, "  %s get-max\n", program_name);
+    fprintf(stderr, "  %s set-max NUMERO\n", program_name);
+
+    fprintf(stderr, "  %s monitor-on\n", program_name);
+    fprintf(stderr, "  %s monitor-off\n", program_name);
+    fprintf(stderr, "  %s monitor-status\n", program_name);
+
+    fprintf(stderr, "  %s uid-add UID\n", program_name);
+    fprintf(stderr, "  %s uid-remove UID\n", program_name);
+    fprintf(stderr, "  %s uid-list\n", program_name);
+
+    fprintf(stderr, "  %s program-add NOME\n", program_name);
+    fprintf(stderr, "  %s program-remove NOME\n", program_name);
+    fprintf(stderr, "  %s program-list\n", program_name);
+
+    fprintf(stderr, "  %s syscall-add NUMERO\n", program_name);
+    fprintf(stderr, "  %s syscall-remove NUMERO\n", program_name);
+    fprintf(stderr, "  %s syscall-list\n", program_name);
+
+    fprintf(stderr, "  %s stats\n", program_name);
 }
 
 static int parse_max(const char *text, __u32 *value) {
@@ -138,11 +130,72 @@ static int parse_program_name(
     return 0;
 }
 
+static void print_statistics(
+    const struct syscall_throttle_statistics *stats)
+{
+    double average_blocked_threads;
+
+    average_blocked_threads = 0.0;
+
+    if (stats->active_blocking_time_ns != 0) {
+        average_blocked_threads =
+            (double)stats->weighted_blocking_time_ns /
+            (double)stats->active_blocking_time_ns;
+    }
+
+    printf(
+        "Thread attualmente bloccati: %u\n",
+        stats->current_blocked_threads
+    );
+
+    printf(
+        "Picco thread bloccati: %u\n",
+        stats->peak_blocked_threads
+    );
+
+    printf(
+        "Media thread bloccati: %.3f\n",
+        average_blocked_threads
+    );
+
+    printf(
+        "Tempo attivo di blocking: %" PRIu64 " ns\n",
+        (uint64_t)stats->active_blocking_time_ns
+    );
+
+    printf(
+        "Tempo pesato di blocking: %" PRIu64 " ns\n",
+        (uint64_t)stats->weighted_blocking_time_ns
+    );
+
+    if (stats->peak_delay_valid == 0) {
+        printf("Ritardo massimo: non disponibile\n");
+        return;
+    }
+
+    printf(
+        "Ritardo massimo: %" PRIu64 " ns (%.3f ms)\n",
+        (uint64_t)stats->peak_delay_ns,
+        (double)stats->peak_delay_ns / 1000000.0
+    );
+
+    printf(
+        "UID associato al ritardo massimo: %u\n",
+        stats->peak_delay_uid
+    );
+
+    printf(
+        "Programma associato al ritardo massimo: %s\n",
+        stats->peak_delay_program
+    );
+}
+
 int syscall_throttle_controller_run(int argc, char *argv[]) {
     struct syscall_throttle_uid_list uid_list;
     struct syscall_throttle_program program;
     struct syscall_throttle_program_list program_list;
     struct syscall_throttle_syscall_list syscall_list;
+    struct syscall_throttle_statistics statistics;
     __u32 value;
     __u32 i;
     int fd;
@@ -196,7 +249,8 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
                strcmp(argv[1], "monitor-status") == 0 ||
                strcmp(argv[1], "uid-list") == 0 ||
                strcmp(argv[1], "program-list") == 0 ||
-               strcmp(argv[1], "syscall-list") == 0) {
+               strcmp(argv[1], "syscall-list") == 0 ||
+               strcmp(argv[1], "stats") == 0) {
         if (argc != 2) {
             print_usage(argv[0]);
             return 1;
@@ -386,6 +440,23 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
                 }
             }
         }
+    } else if (strcmp(argv[1], "stats") == 0) {
+        memset(
+            &statistics,
+            0,
+            sizeof(statistics)
+        );
+
+        if (ioctl(
+                fd,
+                SYSCALL_THROTTLE_IOC_GET_STATS,
+                &statistics) == -1) {
+
+            perror("ioctl GET_STATS fallito");
+            status = 1;
+                } else {
+                    print_statistics(&statistics);
+                }
     }
 
     /*

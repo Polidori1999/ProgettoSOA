@@ -165,4 +165,41 @@ struct syscall_throttle_syscall_list {
     _IOR(SYSCALL_THROTTLE_IOC_MAGIC, 14, \
          struct syscall_throttle_syscall_list)
 
+
+/*
+ * Statistiche globali del meccanismo di throttling.
+ *
+ * I valori temporali sono espressi in nanosecondi.
+ *
+ * La media dei thread bloccati viene calcolata in
+ * user-space come:
+ *
+ * weighted_blocking_time_ns /
+ * active_blocking_time_ns
+ */
+struct syscall_throttle_statistics {
+    __u64 active_blocking_time_ns;
+    __u64 weighted_blocking_time_ns;
+    __u64 peak_delay_ns;
+
+    __u32 current_blocked_threads;
+    __u32 peak_blocked_threads;
+
+    __u32 peak_delay_uid;
+    __u32 peak_delay_valid;
+
+    char peak_delay_program[
+        SYSCALL_THROTTLE_PROGRAM_NAME_LEN
+    ];
+};
+
+/*
+ * Restituisce uno snapshot delle statistiche globali.
+ */
+#define SYSCALL_THROTTLE_IOC_GET_STATS \
+    _IOR(SYSCALL_THROTTLE_IOC_MAGIC, 15, \
+         struct syscall_throttle_statistics)
+
+
+
 #endif /* SYSCALL_THROTTLE_IOCTL_H */
