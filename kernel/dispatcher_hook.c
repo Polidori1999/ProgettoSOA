@@ -3,8 +3,10 @@
 
 #include <linux/atomic.h>
 #include <linux/errno.h>
+#include <linux/err.h>
 #include <linux/kprobes.h>
 #include <linux/printk.h>
+#include <linux/rcupdate.h>
 #include <linux/ptrace.h>
 #include <linux/types.h>
 #include <linux/wait.h>
@@ -50,15 +52,40 @@ static struct kprobe dispatcher_probe;
 static bool dispatcher_probe_registered;
 
 /*
- * Numero di esecuzioni già redirette verso il nostro
- * dispatcher e non ancora completate.
+ * Numero di redirezioni che non hanno ancora completato
+ * la fase C di preparazione del one-way handoff.
  *
- * Serve a impedire che l'unload termini mentre una CPU
- * sta ancora eseguendo codice del modulo.
+ * Quando il contatore torna a zero non rimangono helper C
+ * attivi. Le ultime istruzioni del trampoline assembly,
+ * comprese tra il decremento e il salto definitivo alla
+ * syscall originale, sono protette durante l'unload
+ * tramite synchronize_rcu_tasks().
  */
 static atomic_t active_dispatchers = ATOMIC_INIT(0);
 
+
 static DECLARE_WAIT_QUEUE_HEAD(dispatcher_wait_queue);
+
+/*
+ * Entry assembly raggiunta direttamente dalla Kprobe.
+ *
+ * Ha la stessa firma logica di x64_sys_call().
+ */
+extern long syscall_throttle_dispatch_entry(
+    const struct pt_regs *syscall_regs,
+    unsigned int syscall_nr
+);
+
+/*
+ * Helper C invocato da dispatcher_entry.S.
+ *
+ * Restituisce l'indirizzo della syscall originale oppure
+ * un ERR_PTR contenente il risultato negativo da riportare.
+ */
+unsigned long syscall_throttle_dispatch_prepare(
+    const struct pt_regs *syscall_regs,
+    unsigned int syscall_nr
+);
 
 /*
  * Recupera kallsyms_lookup_name attraverso una Kprobe
@@ -109,13 +136,25 @@ static int syscall_throttle_find_kallsyms_lookup_name(
 
 
 /*
- * Dispatcher delle syscall redirette.
+ * Prepara il trasferimento verso la syscall originale.
  *
- * Viene raggiunto per le syscall registrate.
- * Applica l'enforcement prima di chiamare la syscall
- * originale.
+ * Tutto il lavoro appartenente al modulo termina qui:
+ *
+ * - matching;
+ * - accounting;
+ * - eventuale attesa;
+ * - aggiornamento statistiche;
+ * - decremento del contatore dei dispatcher.
+ *
+ * Il valore restituito è:
+ *
+ * - indirizzo della syscall originale, in caso di successo;
+ * - ERR_PTR(errore), se la syscall non deve essere eseguita.
+ *
+ * L'effettivo salto alla syscall viene eseguito da
+ * dispatcher_entry.S, senza creare un return address nel modulo.
  */
-static long syscall_throttle_dispatch(
+unsigned long syscall_throttle_dispatch_prepare(
     const struct pt_regs *syscall_regs,
     unsigned int syscall_nr)
 {
@@ -123,9 +162,10 @@ static long syscall_throttle_dispatch(
     sys_call_ptr_t syscall_function;
     int enforcement_result;
     __u32 visible_uid;
-    long result;
+    unsigned long handoff_target;
 
-    result = -ENOSYS;
+    handoff_target =
+        (unsigned long)ERR_PTR(-ENOSYS);
 
     if (unlikely(resolved_sys_call_table == NULL))
         goto completed;
@@ -151,13 +191,14 @@ static long syscall_throttle_dispatch(
 
     /*
      * Un segnale può interrompere l'attesa prima che
-     * la syscall originale sia stata eseguita.
-     *
-     * In questo caso restituiamo -ERESTARTSYS al
-     * normale percorso di uscita delle syscall.
+     * la syscall originale venga eseguita.
      */
     if (unlikely(enforcement_result < 0)) {
-        result = enforcement_result;
+        handoff_target =
+            (unsigned long)ERR_PTR(
+                enforcement_result
+            );
+
         goto completed;
     }
 
@@ -168,8 +209,7 @@ static long syscall_throttle_dispatch(
      *
      * Zero:
      * monitor spento, nessun matching oppure shutdown.
-     * In tutti questi casi la syscall deve comunque
-     * essere eseguita normalmente.
+     * La syscall deve comunque essere eseguita.
      */
     if (enforcement_result > 0) {
         visible_uid = from_kuid_munged(
@@ -193,24 +233,32 @@ static long syscall_throttle_dispatch(
     }
 
     /*
-     * La syscall originale viene eseguita soltanto
-     * dopo che l'enforcement ha autorizzato il task.
+     * La syscall è autorizzata.
+     *
+     * Non viene chiamata da questa funzione: restituiamo
+     * il suo indirizzo all'entry assembly.
      */
-    result = syscall_function(syscall_regs);
+    handoff_target =
+        (unsigned long)syscall_function;
 
 completed:
+    /*
+     * Da questo momento non resta più alcuna operazione C
+     * appartenente al dispatcher.
+     */
     if (atomic_dec_and_test(&active_dispatchers))
         wake_up(&dispatcher_wait_queue);
 
-    return result;
+    return handoff_target;
 }
 
+NOKPROBE_SYMBOL(
+    syscall_throttle_dispatch_prepare
+);
 
-/*
- * Impedisce che il dispatcher venga scelto come
- * probepoint da altre Kprobe.
- */
-NOKPROBE_SYMBOL(syscall_throttle_dispatch);
+NOKPROBE_SYMBOL(
+    syscall_throttle_dispatch_entry
+);
 
 /*
  * Handler atomico della Kprobe.
@@ -249,7 +297,7 @@ static int syscall_throttle_dispatch_pre_handler(
      * della chiamata originale a x64_sys_call().
      */
     registers->ip =
-        (unsigned long)syscall_throttle_dispatch;
+        (unsigned long)syscall_throttle_dispatch_entry;
 
     /*
      * Impedisce a Kprobes di eseguire in single-step
@@ -368,12 +416,25 @@ void syscall_throttle_dispatcher_hook_exit(void)
     }
 
     /*
-     * Poi aspetta le syscall già redirette.
+     * Poi attende che tutte le redirezioni già avviate
+     * abbiano completato la fase C di preparazione.
+     *
+     * Non attende il completamento delle syscall originali.
      */
     wait_event(
         dispatcher_wait_queue,
         atomic_read(&active_dispatchers) == 0
     );
+
+    /*
+     * Il contatore viene decrementato appena prima che
+     * dispatcher_entry.S esegua il salto definitivo.
+     *
+     * Tasks RCU copre il brevissimo intervallo nel quale
+     * un task potrebbe essere stato preemptato nelle ultime
+     * istruzioni del trampoline assembly.
+     */
+    synchronize_rcu_tasks();
 
     resolved_sys_call_table = NULL;
 
