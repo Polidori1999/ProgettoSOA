@@ -52,11 +52,14 @@ static struct kprobe dispatcher_probe;
 static bool dispatcher_probe_registered;
 
 /*
- * Numero di esecuzioni già redirette verso il nostro
- * dispatcher e non ancora completate.
+ * Numero di redirezioni che non hanno ancora completato
+ * la fase C di preparazione del one-way handoff.
  *
- * Serve a impedire che l'unload termini mentre una CPU
- * sta ancora eseguendo codice del modulo.
+ * Quando il contatore torna a zero non rimangono helper C
+ * attivi. Le ultime istruzioni del trampoline assembly,
+ * comprese tra il decremento e il salto definitivo alla
+ * syscall originale, sono protette durante l'unload
+ * tramite synchronize_rcu_tasks().
  */
 static atomic_t active_dispatchers = ATOMIC_INIT(0);
 
@@ -413,7 +416,10 @@ void syscall_throttle_dispatcher_hook_exit(void)
     }
 
     /*
-     * Poi aspetta le syscall già redirette.
+     * Poi attende che tutte le redirezioni già avviate
+     * abbiano completato la fase C di preparazione.
+     *
+     * Non attende il completamento delle syscall originali.
      */
     wait_event(
         dispatcher_wait_queue,
