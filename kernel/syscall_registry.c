@@ -56,18 +56,6 @@ long syscall_throttle_syscall_register(unsigned long arg)
     if (!syscall_throttle_syscall_number_valid(syscall_nr))
         return -EINVAL;
 
-    /*
-     * active_dispatchers viene decrementato soltanto
-     * dopo il ritorno della syscall originale.
-     *
-     * exit ed exit_group non ritornano e impedirebbero
-     * quindi il completamento sicuro dell'unload.
-     */
-    if (syscall_nr == __NR_exit ||
-        syscall_nr == __NR_exit_group) {
-        return -EOPNOTSUPP;
-    }
-
     result = 0;
 
     mutex_lock(&registered_syscalls_lock);
