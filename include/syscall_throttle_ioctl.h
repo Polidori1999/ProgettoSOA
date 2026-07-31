@@ -171,14 +171,14 @@ struct syscall_throttle_syscall_list {
  *
  * I valori temporali sono espressi in nanosecondi.
  *
- * La media dei thread bloccati viene calcolata in
- * user-space come:
+ * La media temporale dei thread bloccati viene
+ * calcolata in user-space come:
  *
  * weighted_blocking_time_ns /
- * active_blocking_time_ns
+ * monitor_enabled_time_ns
  */
 struct syscall_throttle_statistics {
-    __u64 active_blocking_time_ns;
+    __u64 monitor_enabled_time_ns;
     __u64 weighted_blocking_time_ns;
     __u64 peak_delay_ns;
 

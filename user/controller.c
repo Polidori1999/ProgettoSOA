@@ -137,10 +137,10 @@ static void print_statistics(
 
     average_blocked_threads = 0.0;
 
-    if (stats->active_blocking_time_ns != 0) {
+    if (stats->monitor_enabled_time_ns != 0) {
         average_blocked_threads =
             (double)stats->weighted_blocking_time_ns /
-            (double)stats->active_blocking_time_ns;
+            (double)stats->monitor_enabled_time_ns;
     }
 
     printf(
@@ -159,8 +159,8 @@ static void print_statistics(
     );
 
     printf(
-        "Tempo attivo di blocking: %" PRIu64 " ns\n",
-        (uint64_t)stats->active_blocking_time_ns
+        "Tempo totale monitor attivo: %" PRIu64 " ns\n",
+        (uint64_t)stats->monitor_enabled_time_ns
     );
 
     printf(

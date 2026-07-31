@@ -30,16 +30,22 @@ static __u32 current_blocked_threads;
 static __u32 peak_blocked_threads;
 
 /*
- * Ultimo istante in cui current_blocked_threads
- * è cambiato.
+ * Ultimo istante fino al quale gli integrali temporali
+ * sono stati aggiornati.
  */
-static u64 last_change_ns;
+static u64 last_update_ns;
 
 /*
- * Tempo complessivo durante il quale almeno un task
- * è rimasto bloccato.
+ * Indica se il tempo corrente appartiene a un intervallo
+ * durante il quale il monitor è attivo.
  */
-static u64 active_blocking_time_ns;
+static bool monitor_observation_active;
+
+/*
+ * Tempo cumulativo durante il quale il monitor è stato
+ * attivo. I periodi monitor-off vengono esclusi.
+ */
+static u64 monitor_enabled_time_ns;
 
 /*
  * Integrale temporale del numero di task bloccati:
@@ -71,21 +77,49 @@ static void syscall_throttle_statistics_update_time(
 {
     u64 elapsed_ns;
 
-    if (last_change_ns == 0) {
-        last_change_ns = now_ns;
+    if (last_update_ns == 0) {
+        last_update_ns = now_ns;
         return;
     }
 
-    elapsed_ns = now_ns - last_change_ns;
+    elapsed_ns = now_ns - last_update_ns;
 
-    if (current_blocked_threads > 0) {
-        active_blocking_time_ns += elapsed_ns;
+    if (monitor_observation_active) {
+        monitor_enabled_time_ns += elapsed_ns;
 
         weighted_blocking_time_ns +=
             elapsed_ns * current_blocked_threads;
     }
 
-    last_change_ns = now_ns;
+    last_update_ns = now_ns;
+}
+
+
+void syscall_throttle_statistics_monitor_state_changed(
+    bool enabled)
+{
+    unsigned long flags;
+    u64 now_ns;
+
+    now_ns = ktime_get_ns();
+
+    spin_lock_irqsave(
+        &statistics_lock,
+        flags
+    );
+
+    /*
+     * Prima contabilizza l'intervallo appartenente allo
+     * stato precedente, poi rende effettivo il nuovo stato.
+     */
+    syscall_throttle_statistics_update_time(now_ns);
+
+    monitor_observation_active = enabled;
+
+    spin_unlock_irqrestore(
+        &statistics_lock,
+        flags
+    );
 }
 
 
@@ -186,12 +220,12 @@ long syscall_throttle_statistics_get(unsigned long arg)
 
     /*
      * Include nello snapshot anche il tempo trascorso
-     * dall'ultima variazione del numero di bloccati.
+     * dall'ultimo aggiornamento statistico.
      */
     syscall_throttle_statistics_update_time(now_ns);
 
-    snapshot.active_blocking_time_ns =
-        active_blocking_time_ns;
+    snapshot.monitor_enabled_time_ns =
+        monitor_enabled_time_ns;
 
     snapshot.weighted_blocking_time_ns =
         weighted_blocking_time_ns;
