@@ -8,6 +8,7 @@
 #include "access_control.h"
 #include "accounting.h"
 #include "config.h"
+#include "statistics.h"
 #include "throttle_engine.h"
 
 
@@ -74,6 +75,14 @@ long syscall_throttle_config_enable_monitor(void)
      */
     syscall_throttle_accounting_reset();
 
+    /*
+     * L'osservazione statistica comincia prima di rendere
+     * visibile il monitor al percorso delle syscall.
+     */
+    syscall_throttle_statistics_monitor_state_changed(
+        true
+    );
+
     WRITE_ONCE(monitor_enabled, true);
 
     pr_info(
@@ -93,6 +102,14 @@ long syscall_throttle_config_disable_monitor(void)
      * nel percorso di accounting.
      */
     WRITE_ONCE(monitor_enabled, false);
+
+    /*
+     * Chiude l'intervallo statistico dopo aver impedito
+     * nuovi ingressi nel monitor.
+     */
+    syscall_throttle_statistics_monitor_state_changed(
+        false
+    );
 
     /*
      * La prossima attivazione partirà da una finestra

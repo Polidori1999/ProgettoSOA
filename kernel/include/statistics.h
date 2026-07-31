@@ -5,6 +5,19 @@
 #include <linux/uidgid.h>
 
 /*
+ * Registra una transizione dello stato del monitor.
+ *
+ * enabled=true:
+ *     inizia un intervallo di osservazione attivo.
+ *
+ * enabled=false:
+ *     conclude l'intervallo di osservazione corrente.
+ */
+void syscall_throttle_statistics_monitor_state_changed(
+    bool enabled
+);
+
+/*
  * Registra il primo ingresso effettivo di un task
  * nello stato bloccato.
  *
