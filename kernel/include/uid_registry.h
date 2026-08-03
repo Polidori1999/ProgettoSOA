@@ -12,7 +12,8 @@ long syscall_throttle_uid_unregister(unsigned long arg);
 long syscall_throttle_uid_get_list(unsigned long arg);
 
 /*
- * Funzione usata dal futuro data plane.
+ * Verifica se un effective UID appartiene al registro
+ * consultato dal data plane.
  *
  * La lettura avviene tramite RCU e non acquisisce mutex.
  */

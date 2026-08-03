@@ -11,9 +11,10 @@ long syscall_throttle_syscall_unregister(unsigned long arg);
 long syscall_throttle_syscall_get_list(unsigned long arg);
 
 /*
- * Funzione destinata al futuro data plane.
+ * Verifica se un numero di syscall x86-64 appartiene
+ * al registro consultato dal data plane.
  *
- * Permetterà al monitor di controllare rapidamente
+ * Consente al monitor di controllare rapidamente
  * se una syscall è registrata.
  */
 bool syscall_throttle_syscall_matches(unsigned int syscall_nr);

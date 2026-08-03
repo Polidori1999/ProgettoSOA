@@ -11,7 +11,8 @@ long syscall_throttle_program_unregister(unsigned long arg);
 long syscall_throttle_program_get_list(unsigned long arg);
 
 /*
- * Funzione del futuro data plane.
+ * Verifica se un nome di programma appartiene al
+ * registro consultato dal data plane.
  *
  * La lettura usa RCU e non acquisisce mutex.
  */
