@@ -25,9 +25,8 @@
 
 
 /*
- * Wait queue usata dai thread eccedenti.
- *
- * Verrà utilizzata nella prossima sottofase.
+ * Wait queue globale usata dai thread che eccedono
+ * la quota disponibile nella finestra corrente.
  */
 static DECLARE_WAIT_QUEUE_HEAD(
     syscall_throttle_wait_queue
@@ -37,9 +36,8 @@ static DECLARE_WAIT_QUEUE_HEAD(
  * Cambia ogni volta che il monitor viene disattivato
  * o il modulo entra in shutdown.
  *
- * In futuro permetterà ai thread di riconoscere un
- * monitor-off anche se il monitor viene riattivato
- * molto rapidamente.
+ * Permette ai waiter di riconoscere un monitor-off
+ * anche se il monitor viene riattivato rapidamente.
  */
 static atomic64_t control_generation =
     ATOMIC64_INIT(0);
@@ -50,28 +48,23 @@ static atomic64_t control_generation =
 static bool engine_shutting_down;
 
 /*
- * Timer autonomo destinato a scandire finestre
- * consecutive della durata di un secondo.
- *
- * In questo checkpoint viene inizializzato, ma non
- * viene ancora collegato a monitor-on.
+ * Timer autonomo che scandisce finestre consecutive
+ * della durata di un secondo.
  */
 static struct hrtimer window_timer;
 
 /*
- * Cambierà a ogni apertura di una nuova finestra.
- *
- * Nel passo successivo verrà aggiunta alle condizioni
- * di attesa dei waiter.
+ * Cambia a ogni apertura di una nuova finestra e
+ * permette ai waiter di rilevare il tick del timer.
  */
 static atomic64_t window_generation =
     ATOMIC64_INIT(0);
 
 
 /*
- * Callback della futura finestra periodica.
+ * Callback della finestra periodica.
  *
- * La callback opera in contesto atomico:
+ * Opera in contesto atomico:
  *
  * - azzera il contatore globale;
  * - pubblica una nuova generazione;
@@ -415,9 +408,8 @@ out:
 void syscall_throttle_engine_monitor_disabled(void)
 {
     /*
-     * È innocuo anche quando il timer non è stato
-     * avviato. Sarà necessario quando monitor-on verrà
-     * collegato al timer autonomo.
+     * Cancella sincronicamente il timer. L'operazione
+     * è innocua anche quando il timer non è armato.
      */
     hrtimer_cancel(&window_timer);
 
@@ -429,7 +421,7 @@ void syscall_throttle_engine_monitor_disabled(void)
     atomic64_inc(&control_generation);
 
     /*
-     * La futura attesa userà TASK_INTERRUPTIBLE.
+     * Risveglia tutti i waiter in attesa interruptible.
      */
     wake_up_interruptible_all(
         &syscall_throttle_wait_queue
