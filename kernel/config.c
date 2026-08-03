@@ -1,6 +1,7 @@
 #include <linux/compiler.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
+#include <linux/mutex.h>
 #include <linux/printk.h>
 #include <linux/uaccess.h>
 #include <linux/uidgid.h>
@@ -20,6 +21,15 @@
  */
 static __u32 max_syscalls_per_second = 1000;
 static bool monitor_enabled;
+
+/*
+ * Serializza le transizioni globali monitor-on e
+ * monitor-off.
+ *
+ * Il fast path continua a leggere monitor_enabled
+ * mediante READ_ONCE(), senza acquisire il mutex.
+ */
+static DEFINE_MUTEX(monitor_state_lock);
 
 
 
@@ -71,6 +81,12 @@ long syscall_throttle_config_enable_monitor(void)
         return -EPERM;
 
     /*
+     * Accounting, statistiche, timer e pubblicazione
+     * dello stato formano una sola transizione globale.
+     */
+    mutex_lock(&monitor_state_lock);
+
+    /*
      * Il monitor riparte sempre da una finestra vuota.
      */
     syscall_throttle_accounting_reset();
@@ -95,6 +111,8 @@ long syscall_throttle_config_enable_monitor(void)
         "syscall_throttle: monitor attivato\n"
     );
 
+    mutex_unlock(&monitor_state_lock);
+
     return 0;
 }
 
@@ -102,6 +120,12 @@ long syscall_throttle_config_disable_monitor(void)
 {
     if (!syscall_throttle_is_root())
         return -EPERM;
+
+    /*
+     * Impedisce la sovrapposizione con una transizione
+     * monitor-on concorrente.
+     */
+    mutex_lock(&monitor_state_lock);
 
     /*
      * Prima impediamo ai nuovi dispatcher di entrare
@@ -124,13 +148,15 @@ long syscall_throttle_config_disable_monitor(void)
     syscall_throttle_accounting_reset();
 
     /*
-     * Risveglia tutti i thread eventualmente sospesi.
+     * Cancella il timer e risveglia i thread sospesi.
      */
     syscall_throttle_engine_monitor_disabled();
 
     pr_info(
         "syscall_throttle: monitor disattivato\n"
     );
+
+    mutex_unlock(&monitor_state_lock);
 
     return 0;
 }
