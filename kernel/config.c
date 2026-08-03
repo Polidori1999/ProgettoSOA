@@ -83,6 +83,12 @@ long syscall_throttle_config_enable_monitor(void)
         true
     );
 
+    /*
+     * Arma la prima finestra prima di rendere visibile
+     * il monitor al percorso delle syscall.
+     */
+    syscall_throttle_engine_monitor_enabled();
+
     WRITE_ONCE(monitor_enabled, true);
 
     pr_info(

@@ -82,10 +82,8 @@ static enum hrtimer_restart
 syscall_throttle_window_timer_callback(
     struct hrtimer *timer)
 {
-    if (READ_ONCE(engine_shutting_down) ||
-        !syscall_throttle_config_monitor_enabled()) {
+    if (READ_ONCE(engine_shutting_down))
         return HRTIMER_NORESTART;
-    }
 
     syscall_throttle_accounting_reset();
 
@@ -126,10 +124,9 @@ void syscall_throttle_engine_monitor_enabled(void)
     hrtimer_cancel(&window_timer);
 
     /*
-     * Ogni nuova sequenza parte con quota vuota.
+     * La quota è già stata azzerata da config.c prima
+     * di rendere attivo il monitor.
      */
-    syscall_throttle_accounting_reset();
-
     atomic64_inc(&window_generation);
 
     wake_up_interruptible_all(
@@ -227,7 +224,8 @@ int syscall_throttle_engine_enforce(
     long syscall_id,
     struct syscall_throttle_decision *decision)
 {
-    s64 observed_generation;
+    s64 observed_control_generation;
+    s64 observed_window_generation;
     long wait_result;
 
     bool task_blocked = false;
@@ -249,8 +247,11 @@ int syscall_throttle_engine_enforce(
          * seguito immediatamente da monitor-on mentre
          * il task stava eseguendo l'accounting.
          */
-        observed_generation =
+        observed_control_generation =
             atomic64_read(&control_generation);
+
+        observed_window_generation =
+            atomic64_read(&window_generation);
 
         /*
          * Durante l'unload nessun dispatcher deve
@@ -288,19 +289,21 @@ int syscall_throttle_engine_enforce(
         if (READ_ONCE(engine_shutting_down) ||
             !syscall_throttle_config_monitor_enabled() ||
             atomic64_read(&control_generation) !=
-                observed_generation) {
+                observed_control_generation) {
 
             result = 0;
             goto out;
         }
 
         /*
-         * In caso di scadenza contemporanea della
-         * finestra ripetiamo immediatamente l'accounting,
-         * senza considerare il task realmente bloccato.
+         * Il timer potrebbe avere aperto una nuova
+         * finestra dopo la valutazione. In tal caso il
+         * task ripete subito matching e accounting.
          */
-        if (decision->accounting.wait_ns == 0)
+        if (atomic64_read(&window_generation) !=
+            observed_window_generation) {
             continue;
+        }
 
         /*
          * Il task entra nello stato statisticamente
@@ -336,15 +339,14 @@ int syscall_throttle_engine_enforce(
          * - ricezione di un segnale.
          */
         wait_result =
-            wait_event_interruptible_hrtimeout(
+            wait_event_interruptible(
                 syscall_throttle_wait_queue,
                 READ_ONCE(engine_shutting_down) ||
                 !syscall_throttle_config_monitor_enabled() ||
                 atomic64_read(&control_generation) !=
-                    observed_generation,
-                ns_to_ktime(
-                    decision->accounting.wait_ns
-                )
+                    observed_control_generation ||
+                atomic64_read(&window_generation) !=
+                    observed_window_generation
             );
 
         /*
@@ -363,29 +365,28 @@ int syscall_throttle_engine_enforce(
         if (READ_ONCE(engine_shutting_down) ||
             !syscall_throttle_config_monitor_enabled() ||
             atomic64_read(&control_generation) !=
-                observed_generation) {
+                observed_control_generation) {
 
             result = 0;
             goto out;
         }
 
         /*
-         * Alla scadenza del timeout il task ripete
-         * l'accounting.
+         * Un cambio di window_generation indica che il
+         * timer ha aperto una nuova finestra.
          */
-        if (wait_result == -ETIME)
+        if (atomic64_read(&window_generation) !=
+            observed_window_generation) {
             continue;
+        }
 
         /*
-         * Per robustezza, un risveglio senza errore
-         * provoca una nuova valutazione.
+         * La wait queue rivaluta internamente la propria
+         * condizione. Questo ramo resta come protezione.
          */
         if (wait_result == 0)
             continue;
 
-        /*
-         * Protezione da valori inattesi.
-         */
         result = (int)wait_result;
         goto out;
     }

@@ -9,10 +9,6 @@
 
 /*
  * Risultato della valutazione di una syscall.
- *
- * Questa struttura contiene tutte le informazioni
- * che serviranno sia al monitor temporaneo sia al
- * futuro dispatcher.
  */
 struct syscall_throttle_decision {
     long syscall_id;
@@ -28,78 +24,44 @@ struct syscall_throttle_decision {
 
 /*
  * Inizializza il timer globale delle finestre.
- *
- * In questa fase il timer viene soltanto predisposto:
- * non viene ancora avviato.
  */
 void syscall_throttle_engine_init(void);
 
 /*
  * Avvia una nuova sequenza di finestre periodiche.
- *
- * Verrà collegata a monitor-on nel passo successivo.
  */
 void syscall_throttle_engine_monitor_enabled(void);
 
 /*
- * Verifica se la syscall corrente è sottoposta al
- * monitoraggio e, in caso positivo, aggiorna il
- * contatore globale.
- *
- * Restituisce:
- *
- * true:
- *     syscall registrata e matching positivo;
- *     il campo decision contiene il risultato.
- *
- * false:
- *     syscall non soggetta al controllo.
- *
- * La funzione non dorme e non alloca memoria.
- */
-/*
- * Verifica se la syscall corrente è sottoposta al
- * monitoraggio e aggiorna l'accounting.
+ * Verifica nuovamente monitor, syscall, programma ed
+ * effective UID e prova a riservare un posto globale.
  */
 bool syscall_throttle_engine_evaluate(
     long syscall_id,
     struct syscall_throttle_decision *decision
 );
 
-
 /*
- * Applica il controllo completo alla syscall corrente.
+ * Applica il throttling completo.
  *
  * Restituisce:
  *
- *  1:
- *      syscall controllata e ammessa;
- *
- *  0:
- *      syscall non controllata, monitor disattivato
- *      oppure motore in shutdown;
- *
- * -ERESTARTSYS:
- *      attesa interrotta da un segnale.
- *
- * Quando la finestra è piena, la funzione sospende il
- * task fino alla sua scadenza e ripete l'accounting.
+ *  1: syscall monitorata e ammessa;
+ *  0: syscall non monitorata, monitor-off o shutdown;
+ * -ERESTARTSYS: attesa interrotta da un segnale.
  */
 int syscall_throttle_engine_enforce(
     long syscall_id,
     struct syscall_throttle_decision *decision
 );
 
-
 /*
- * Risveglia i thread quando il monitor viene
- * disattivato.
+ * Arresta il timer e risveglia i waiter.
  */
 void syscall_throttle_engine_monitor_disabled(void);
 
 /*
- * Impedisce nuove attese e risveglia i thread durante
- * la rimozione del modulo.
+ * Impedisce nuove attese durante l'unload.
  */
 void syscall_throttle_engine_shutdown(void);
 
