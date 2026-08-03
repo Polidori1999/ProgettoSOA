@@ -4,50 +4,38 @@
 #include <linux/types.h>
 
 /*
- * Registra una syscall critica.
- *
- * La funzione:
- *
- * - non dorme;
- * - non alloca memoria;
- * - protegge lo stato globale tra più CPU;
- * - restituisce il tempo residuo della finestra
- *   quando il limite è stato superato.
+ * Risultato del tentativo di riservare un posto nella
+ * finestra temporale globale corrente.
  */
 struct syscall_throttle_accounting_result {
     /*
-     * Numero di syscall ammesse nella finestra.
+     * Numero di syscall già ammesse nella finestra.
      */
     __u32 count;
 
+    /*
+     * Limite utilizzato durante la valutazione.
+     */
     __u32 max;
 
-    bool exceeded;
-    bool new_window;
-
     /*
-     * Tempo residuo della finestra quando exceeded
-     * è true; zero negli altri casi.
+     * True quando non rimangono posti disponibili.
      */
-    u64 wait_ns;
+    bool exceeded;
 };
+
 /*
- * Azzera la finestra e il contatore.
+ * Azzera il contatore globale della finestra.
+ *
+ * La funzione non dorme e non alloca memoria.
  */
 void syscall_throttle_accounting_reset(void);
 
 /*
  * Prova a riservare un posto nella finestra corrente.
  *
- * Se il numero di syscall già ammesse è inferiore a
- * MAX, incrementa il contatore e restituisce
- * exceeded=false.
- *
- * Se la finestra è piena, non incrementa il contatore,
- * restituisce exceeded=true e indica in wait_ns il
- * tempo residuo prima della finestra successiva.
- *
- * La funzione non dorme e non alloca memoria.
+ * La gestione temporale appartiene al timer autonomo
+ * del throttle engine.
  */
 void syscall_throttle_accounting_record(
     __u32 max,
