@@ -9,10 +9,11 @@
 #include <linux/compiler.h>
 #include <linux/wait.h>
 
-#include "statistics.h"
 #include <linux/hrtimer.h>
 #include <linux/ktime.h>
+#include <linux/time64.h>
 
+#include "statistics.h"
 
 #include "accounting.h"
 #include "config.h"
@@ -47,6 +48,101 @@ static atomic64_t control_generation =
  * Impedisce nuove attese durante l'unload.
  */
 static bool engine_shutting_down;
+
+/*
+ * Timer autonomo destinato a scandire finestre
+ * consecutive della durata di un secondo.
+ *
+ * In questo checkpoint viene inizializzato, ma non
+ * viene ancora collegato a monitor-on.
+ */
+static struct hrtimer window_timer;
+
+/*
+ * Cambierà a ogni apertura di una nuova finestra.
+ *
+ * Nel passo successivo verrà aggiunta alle condizioni
+ * di attesa dei waiter.
+ */
+static atomic64_t window_generation =
+    ATOMIC64_INIT(0);
+
+
+/*
+ * Callback della futura finestra periodica.
+ *
+ * La callback opera in contesto atomico:
+ *
+ * - azzera il contatore globale;
+ * - pubblica una nuova generazione;
+ * - risveglia i waiter;
+ * - riarma il timer a un secondo.
+ */
+static enum hrtimer_restart
+syscall_throttle_window_timer_callback(
+    struct hrtimer *timer)
+{
+    if (READ_ONCE(engine_shutting_down) ||
+        !syscall_throttle_config_monitor_enabled()) {
+        return HRTIMER_NORESTART;
+    }
+
+    syscall_throttle_accounting_reset();
+
+    atomic64_inc(&window_generation);
+
+    wake_up_interruptible_all(
+        &syscall_throttle_wait_queue
+    );
+
+    hrtimer_forward_now(
+        timer,
+        ns_to_ktime(NSEC_PER_SEC)
+    );
+
+    return HRTIMER_RESTART;
+}
+
+
+void syscall_throttle_engine_init(void)
+{
+    WRITE_ONCE(engine_shutting_down, false);
+
+    hrtimer_setup(
+        &window_timer,
+        syscall_throttle_window_timer_callback,
+        CLOCK_MONOTONIC,
+        HRTIMER_MODE_REL
+    );
+}
+
+
+void syscall_throttle_engine_monitor_enabled(void)
+{
+    /*
+     * Evita di mantenere una precedente istanza
+     * eventualmente armata.
+     */
+    hrtimer_cancel(&window_timer);
+
+    /*
+     * Ogni nuova sequenza parte con quota vuota.
+     */
+    syscall_throttle_accounting_reset();
+
+    atomic64_inc(&window_generation);
+
+    wake_up_interruptible_all(
+        &syscall_throttle_wait_queue
+    );
+
+    hrtimer_start(
+        &window_timer,
+        ns_to_ktime(NSEC_PER_SEC),
+        HRTIMER_MODE_REL
+    );
+}
+
 
 bool syscall_throttle_engine_evaluate(
     long syscall_id,
@@ -317,6 +413,13 @@ out:
 
 void syscall_throttle_engine_monitor_disabled(void)
 {
+    /*
+     * È innocuo anche quando il timer non è stato
+     * avviato. Sarà necessario quando monitor-on verrà
+     * collegato al timer autonomo.
+     */
+    hrtimer_cancel(&window_timer);
+
     /*
      * L'incremento rende osservabile l'evento anche se
      * il monitor viene riattivato prima che tutti i

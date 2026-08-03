@@ -27,6 +27,21 @@ struct syscall_throttle_decision {
 };
 
 /*
+ * Inizializza il timer globale delle finestre.
+ *
+ * In questa fase il timer viene soltanto predisposto:
+ * non viene ancora avviato.
+ */
+void syscall_throttle_engine_init(void);
+
+/*
+ * Avvia una nuova sequenza di finestre periodiche.
+ *
+ * Verrà collegata a monitor-on nel passo successivo.
+ */
+void syscall_throttle_engine_monitor_enabled(void);
+
+/*
  * Verifica se la syscall corrente è sottoposta al
  * monitoraggio e, in caso positivo, aggiorna il
  * contatore globale.

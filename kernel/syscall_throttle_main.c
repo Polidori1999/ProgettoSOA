@@ -95,6 +95,12 @@ static struct miscdevice syscall_throttle_device = {
 static int __init syscall_throttle_init(void) {
     int ret;
 
+    /*
+     * Predispone il timer prima di rendere disponibile
+     * il device e prima di installare il dispatcher.
+     */
+    syscall_throttle_engine_init();
+
     ret = misc_register(&syscall_throttle_device);
     if (ret != 0) {
         pr_err(
