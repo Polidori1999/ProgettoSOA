@@ -41,53 +41,9 @@ static void print_usage(const char *program_name)
     fprintf(stderr, "  %s stats\n", program_name);
 }
 
-static int parse_max(const char *text, __u32 *value) {
-    unsigned long parsed;
-    char *end;
-
-    errno = 0;
-    end = NULL;
-
-    parsed = strtoul(text, &end, 10);
-
-    if (errno != 0 ||
-        end == text ||
-        *end != '\0' ||
-        parsed == 0 ||
-        parsed > UINT_MAX) {
-        return -1;
-    }
-
-    *value = (__u32) parsed;
-    return 0;
-}
-
-static int parse_uid(const char *text, __u32 *value) {
-    unsigned long parsed;
-    char *end;
-
-    errno = 0;
-    end = NULL;
-
-    parsed = strtoul(text, &end, 10);
-
-    /*
-     * A differenza di MAX, l'UID zero è valido.
-     */
-    if (errno != 0 ||
-        end == text ||
-        *end != '\0' ||
-        parsed > UINT_MAX) {
-        return -1;
-    }
-
-    *value = (__u32) parsed;
-    return 0;
-}
-
-
-static int parse_syscall_number(
+static int parse_u32(
     const char *text,
+    __u32 minimum,
     __u32 *value) {
     unsigned long parsed;
     char *end;
@@ -100,6 +56,7 @@ static int parse_syscall_number(
     if (errno != 0 ||
         end == text ||
         *end != '\0' ||
+        parsed < minimum ||
         parsed > UINT_MAX) {
         return -1;
     }
@@ -212,7 +169,7 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
 
     if (strcmp(argv[1], "set-max") == 0) {
         if (argc != 3 ||
-            parse_max(argv[2], &value) != 0) {
+            parse_u32(argv[2], 1U, &value) != 0) {
             fprintf(stderr,
                     "Errore: MAX deve essere un intero positivo.\n");
             return 1;
@@ -220,7 +177,7 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
     } else if (strcmp(argv[1], "uid-add") == 0 ||
                strcmp(argv[1], "uid-remove") == 0) {
         if (argc != 3 ||
-            parse_uid(argv[2], &value) != 0) {
+            parse_u32(argv[2], 0U, &value) != 0) {
             fprintf(stderr,
                     "Errore: UID non valido.\n");
             return 1;
@@ -237,7 +194,7 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
     } else if (strcmp(argv[1], "syscall-add") == 0 ||
                strcmp(argv[1], "syscall-remove") == 0) {
         if (argc != 3 ||
-            parse_syscall_number(argv[2], &value) != 0) {
+            parse_u32(argv[2], 0U, &value) != 0) {
             fprintf(stderr,
                     "Errore: numero di syscall non valido.\n");
             return 1;
