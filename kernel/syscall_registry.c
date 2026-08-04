@@ -144,13 +144,11 @@ long syscall_throttle_syscall_get_list(unsigned long arg)
 
     mutex_unlock(&registered_syscalls_lock);
 
-    if (copy_to_user((void __user *)arg,
-                     snapshot,
-                     sizeof(*snapshot)) != 0) {
-        result = -EFAULT;
-    } else {
-        result = 0;
-    }
+    result = copy_to_user(
+        (void __user *)arg,
+        snapshot,
+        sizeof(*snapshot)
+    ) != 0 ? -EFAULT : 0;
 
     kfree(snapshot);
 
