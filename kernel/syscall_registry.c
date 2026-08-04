@@ -39,7 +39,9 @@ static bool syscall_throttle_syscall_number_valid(__u32 syscall_nr)
     return syscall_nr < NR_syscalls;
 }
 
-long syscall_throttle_syscall_register(unsigned long arg)
+static long syscall_throttle_syscall_update(
+    unsigned long arg,
+    bool register_syscall)
 {
     __u32 syscall_nr;
     long result;
@@ -60,52 +62,20 @@ long syscall_throttle_syscall_register(unsigned long arg)
 
     mutex_lock(&registered_syscalls_lock);
 
-    if (test_bit(syscall_nr, registered_syscalls)) {
-        result = -EEXIST;
+    if (register_syscall) {
+        if (test_bit(syscall_nr, registered_syscalls)) {
+            result = -EEXIST;
 
-    } else if (registered_syscall_count >=
-               SYSCALL_THROTTLE_MAX_REGISTERED_SYSCALLS) {
-        result = -ENOSPC;
+        } else if (registered_syscall_count >=
+                   SYSCALL_THROTTLE_MAX_REGISTERED_SYSCALLS) {
+            result = -ENOSPC;
 
-    } else {
-        set_bit(syscall_nr, registered_syscalls);
-        ++registered_syscall_count;
-    }
+        } else {
+            set_bit(syscall_nr, registered_syscalls);
+            ++registered_syscall_count;
+        }
 
-    mutex_unlock(&registered_syscalls_lock);
-
-    if (result == 0) {
-        pr_info(
-            "syscall_throttle: syscall %u registrata\n",
-            syscall_nr
-        );
-    }
-
-    return result;
-}
-
-long syscall_throttle_syscall_unregister(unsigned long arg)
-{
-    __u32 syscall_nr;
-    long result;
-
-    if (!syscall_throttle_is_root())
-        return -EPERM;
-
-    if (copy_from_user(&syscall_nr,
-                       (const void __user *)arg,
-                       sizeof(syscall_nr)) != 0) {
-        return -EFAULT;
-    }
-
-    if (!syscall_throttle_syscall_number_valid(syscall_nr))
-        return -EINVAL;
-
-    result = 0;
-
-    mutex_lock(&registered_syscalls_lock);
-
-    if (!test_bit(syscall_nr, registered_syscalls)) {
+    } else if (!test_bit(syscall_nr, registered_syscalls)) {
         result = -ENOENT;
 
     } else {
@@ -117,12 +87,25 @@ long syscall_throttle_syscall_unregister(unsigned long arg)
 
     if (result == 0) {
         pr_info(
-            "syscall_throttle: syscall %u deregistrata\n",
-            syscall_nr
+            "syscall_throttle: syscall %u %s\n",
+            syscall_nr,
+            register_syscall ?
+                "registrata" :
+                "deregistrata"
         );
     }
 
     return result;
+}
+
+long syscall_throttle_syscall_register(unsigned long arg)
+{
+    return syscall_throttle_syscall_update(arg, true);
+}
+
+long syscall_throttle_syscall_unregister(unsigned long arg)
+{
+    return syscall_throttle_syscall_update(arg, false);
 }
 
 long syscall_throttle_syscall_get_list(unsigned long arg)
@@ -161,13 +144,11 @@ long syscall_throttle_syscall_get_list(unsigned long arg)
 
     mutex_unlock(&registered_syscalls_lock);
 
-    if (copy_to_user((void __user *)arg,
-                     snapshot,
-                     sizeof(*snapshot)) != 0) {
-        result = -EFAULT;
-    } else {
-        result = 0;
-    }
+    result = copy_to_user(
+        (void __user *)arg,
+        snapshot,
+        sizeof(*snapshot)
+    ) != 0 ? -EFAULT : 0;
 
     kfree(snapshot);
 

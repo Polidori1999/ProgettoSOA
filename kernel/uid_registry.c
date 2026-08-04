@@ -13,7 +13,6 @@
 
 #include <syscall_throttle_ioctl.h>
 
-#include "uid_registry.h"
 
 /*
  * Ogni snapshot è immutabile dopo essere stato pubblicato.
@@ -171,8 +170,6 @@ long syscall_throttle_uid_unregister(unsigned long arg)
     struct syscall_throttle_uid_snapshot *new_snapshot;
     struct syscall_throttle_uid_snapshot *old_snapshot;
     __u32 raw_uid;
-    __u32 source_index;
-    __u32 destination_index;
     kuid_t uid;
     int found_index;
     long result;
@@ -214,21 +211,20 @@ long syscall_throttle_uid_unregister(unsigned long arg)
         result = -ENOENT;
 
     } else {
-        destination_index = 0;
+        syscall_throttle_uid_copy_snapshot(
+            new_snapshot,
+            old_snapshot
+        );
 
-        for (source_index = 0;
-             source_index < old_snapshot->count;
-             ++source_index) {
-            if (source_index == (__u32)found_index)
-                continue;
+        memmove(
+            &new_snapshot->uids[found_index],
+            &new_snapshot->uids[found_index + 1],
+            (new_snapshot->count -
+             (__u32)found_index -
+             1U) * sizeof(new_snapshot->uids[0])
+        );
 
-            new_snapshot->uids[destination_index] =
-                old_snapshot->uids[source_index];
-
-            ++destination_index;
-        }
-
-        new_snapshot->count = destination_index;
+        --new_snapshot->count;
 
         rcu_assign_pointer(
             active_uid_snapshot,
