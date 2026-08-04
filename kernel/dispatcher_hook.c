@@ -387,13 +387,13 @@ int syscall_throttle_dispatcher_hook_init(void)
     dispatcher_probe_registered = true;
 
     pr_info(
-        "syscall_throttle: sys_call_table=%px\n",
+        "syscall_throttle: sys_call_table=%p\n",
         resolved_sys_call_table
     );
 
     pr_info(
         "syscall_throttle: Kprobe x64_sys_call "
-        "registrata, address=%px\n",
+        "registrata, address=%p\n",
         dispatcher_probe.addr
     );
 
