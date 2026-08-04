@@ -12,7 +12,6 @@
 
 #include <syscall_throttle_ioctl.h>
 
-#include "program_registry.h"
 
 /*
  * Ogni snapshot diventa immutabile dopo la pubblicazione.

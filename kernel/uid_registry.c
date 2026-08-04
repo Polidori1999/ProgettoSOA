@@ -13,7 +13,6 @@
 
 #include <syscall_throttle_ioctl.h>
 
-#include "uid_registry.h"
 
 /*
  * Ogni snapshot è immutabile dopo essere stato pubblicato.
