@@ -316,13 +316,11 @@ long syscall_throttle_program_get_list(unsigned long arg)
 
     rcu_read_unlock();
 
-    if (copy_to_user((void __user *)arg,
-                     user_list,
-                     sizeof(*user_list)) != 0) {
-        result = -EFAULT;
-    } else {
-        result = 0;
-    }
+    result = copy_to_user(
+        (void __user *)arg,
+        user_list,
+        sizeof(*user_list)
+    ) != 0 ? -EFAULT : 0;
 
     kfree(user_list);
 
