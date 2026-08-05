@@ -9,6 +9,7 @@ CONTROLLER := $(USER_BUILD_DIR)/syscall_throttle_ctl
 TEST_BUILD_DIR := $(USER_BUILD_DIR)/tests
 TEST_COMMON_OBJECT := $(TEST_BUILD_DIR)/test_common.o
 TEST_CONTROL_PLANE := $(TEST_BUILD_DIR)/test_control_plane
+TEST_REGISTRIES := $(TEST_BUILD_DIR)/test_registries
 
 USER_SOURCES := \
 	user/main.c \
@@ -58,10 +59,15 @@ $(CONTROLLER): $(USER_OBJECTS)
 #
 # Programmi di test user-space
 #
-tests: $(TEST_CONTROL_PLANE)
+tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES)
 
 test-control-plane: module tests
 	./tests/run_test.sh $(TEST_CONTROL_PLANE)
+
+.PHONY: test-registries
+
+test-registries: module $(TEST_REGISTRIES)
+	./tests/run_test.sh $(TEST_REGISTRIES)
 
 $(TEST_BUILD_DIR):
 	mkdir -p $(TEST_BUILD_DIR)
@@ -80,6 +86,18 @@ $(TEST_BUILD_DIR)/test_control_plane.o: \
 
 $(TEST_CONTROL_PLANE): \
         $(TEST_BUILD_DIR)/test_control_plane.o \
+        $(TEST_COMMON_OBJECT)
+	$(CC) $^ -o $@
+
+$(TEST_BUILD_DIR)/test_registries.o: \
+        tests/test_registries.c \
+        tests/include/test_common.h \
+        include/syscall_throttle_ioctl.h \
+        | $(TEST_BUILD_DIR)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_REGISTRIES): \
+        $(TEST_BUILD_DIR)/test_registries.o \
         $(TEST_COMMON_OBJECT)
 	$(CC) $^ -o $@
 
