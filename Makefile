@@ -10,6 +10,7 @@ TEST_BUILD_DIR := $(USER_BUILD_DIR)/tests
 TEST_COMMON_OBJECT := $(TEST_BUILD_DIR)/test_common.o
 TEST_CONTROL_PLANE := $(TEST_BUILD_DIR)/test_control_plane
 TEST_REGISTRIES := $(TEST_BUILD_DIR)/test_registries
+TEST_THROTTLING := $(TEST_BUILD_DIR)/test_throttling
 
 USER_SOURCES := \
 	user/main.c \
@@ -59,7 +60,7 @@ $(CONTROLLER): $(USER_OBJECTS)
 #
 # Programmi di test user-space
 #
-tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES)
+tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING)
 
 test-control-plane: module tests
 	./tests/run_test.sh $(TEST_CONTROL_PLANE)
@@ -68,6 +69,11 @@ test-control-plane: module tests
 
 test-registries: module $(TEST_REGISTRIES)
 	./tests/run_test.sh $(TEST_REGISTRIES)
+
+.PHONY: test-throttling
+
+test-throttling: module $(TEST_THROTTLING)
+	./tests/run_test.sh $(TEST_THROTTLING)
 
 $(TEST_BUILD_DIR):
 	mkdir -p $(TEST_BUILD_DIR)
@@ -98,6 +104,18 @@ $(TEST_BUILD_DIR)/test_registries.o: \
 
 $(TEST_REGISTRIES): \
         $(TEST_BUILD_DIR)/test_registries.o \
+        $(TEST_COMMON_OBJECT)
+	$(CC) $^ -o $@
+
+$(TEST_BUILD_DIR)/test_throttling.o: \
+        tests/test_throttling.c \
+        tests/include/test_common.h \
+        include/syscall_throttle_ioctl.h \
+        | $(TEST_BUILD_DIR)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_THROTTLING): \
+        $(TEST_BUILD_DIR)/test_throttling.o \
         $(TEST_COMMON_OBJECT)
 	$(CC) $^ -o $@
 
