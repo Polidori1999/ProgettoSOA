@@ -11,6 +11,7 @@ TEST_COMMON_OBJECT := $(TEST_BUILD_DIR)/test_common.o
 TEST_CONTROL_PLANE := $(TEST_BUILD_DIR)/test_control_plane
 TEST_REGISTRIES := $(TEST_BUILD_DIR)/test_registries
 TEST_THROTTLING := $(TEST_BUILD_DIR)/test_throttling
+TEST_CONCURRENCY := $(TEST_BUILD_DIR)/test_concurrency
 
 USER_SOURCES := \
 	user/main.c \
@@ -60,7 +61,7 @@ $(CONTROLLER): $(USER_OBJECTS)
 #
 # Programmi di test user-space
 #
-tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING)
+tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING) $(TEST_CONCURRENCY)
 
 test-control-plane: module tests
 	./tests/run_test.sh $(TEST_CONTROL_PLANE)
@@ -74,6 +75,11 @@ test-registries: module $(TEST_REGISTRIES)
 
 test-throttling: module $(TEST_THROTTLING)
 	./tests/run_test.sh $(TEST_THROTTLING)
+
+.PHONY: test-concurrency
+
+test-concurrency: module $(TEST_CONCURRENCY)
+	./tests/run_test.sh $(TEST_CONCURRENCY)
 
 $(TEST_BUILD_DIR):
 	mkdir -p $(TEST_BUILD_DIR)
@@ -118,6 +124,18 @@ $(TEST_THROTTLING): \
         $(TEST_BUILD_DIR)/test_throttling.o \
         $(TEST_COMMON_OBJECT)
 	$(CC) $^ -o $@
+
+$(TEST_BUILD_DIR)/test_concurrency.o: \
+        tests/test_concurrency.c \
+        tests/include/test_common.h \
+        include/syscall_throttle_ioctl.h \
+        | $(TEST_BUILD_DIR)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) -pthread -c $< -o $@
+
+$(TEST_CONCURRENCY): \
+        $(TEST_BUILD_DIR)/test_concurrency.o \
+        $(TEST_COMMON_OBJECT)
+	$(CC) $^ -pthread -o $@
 
 #
 # Pulizia e ricompilazione
