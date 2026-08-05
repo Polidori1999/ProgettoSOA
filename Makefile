@@ -12,6 +12,7 @@ TEST_CONTROL_PLANE := $(TEST_BUILD_DIR)/test_control_plane
 TEST_REGISTRIES := $(TEST_BUILD_DIR)/test_registries
 TEST_THROTTLING := $(TEST_BUILD_DIR)/test_throttling
 TEST_CONCURRENCY := $(TEST_BUILD_DIR)/test_concurrency
+TEST_REVALIDATION := $(TEST_BUILD_DIR)/test_revalidation
 
 USER_SOURCES := \
 	user/main.c \
@@ -61,7 +62,7 @@ $(CONTROLLER): $(USER_OBJECTS)
 #
 # Programmi di test user-space
 #
-tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING) $(TEST_CONCURRENCY)
+tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING) $(TEST_CONCURRENCY) $(TEST_REVALIDATION)
 
 test-control-plane: module tests
 	./tests/run_test.sh $(TEST_CONTROL_PLANE)
@@ -80,6 +81,11 @@ test-throttling: module $(TEST_THROTTLING)
 
 test-concurrency: module $(TEST_CONCURRENCY)
 	./tests/run_test.sh $(TEST_CONCURRENCY)
+
+.PHONY: test-revalidation
+
+test-revalidation: module $(TEST_REVALIDATION)
+	./tests/run_test.sh $(TEST_REVALIDATION)
 
 $(TEST_BUILD_DIR):
 	mkdir -p $(TEST_BUILD_DIR)
@@ -137,6 +143,18 @@ $(TEST_CONCURRENCY): \
         $(TEST_COMMON_OBJECT)
 	$(CC) $^ -pthread -o $@
 
+$(TEST_BUILD_DIR)/test_revalidation.o: \
+        tests/test_revalidation.c \
+        tests/include/test_common.h \
+        include/syscall_throttle_ioctl.h \
+        | $(TEST_BUILD_DIR)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) -pthread -c $< -o $@
+
+$(TEST_REVALIDATION): \
+        $(TEST_BUILD_DIR)/test_revalidation.o \
+        $(TEST_COMMON_OBJECT)
+	$(CC) $^ -pthread -o $@
+
 #
 # Pulizia e ricompilazione
 #
@@ -179,3 +197,4 @@ test:
 	$(MAKE) test-registries
 	$(MAKE) test-throttling
 	$(MAKE) test-concurrency
+	$(MAKE) test-revalidation
