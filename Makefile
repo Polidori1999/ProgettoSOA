@@ -6,6 +6,10 @@ CC := gcc
 USER_BUILD_DIR := $(CURDIR)/build
 CONTROLLER := $(USER_BUILD_DIR)/syscall_throttle_ctl
 
+TEST_BUILD_DIR := $(USER_BUILD_DIR)/tests
+TEST_COMMON_OBJECT := $(TEST_BUILD_DIR)/test_common.o
+TEST_CONTROL_PLANE := $(TEST_BUILD_DIR)/test_control_plane
+
 USER_SOURCES := \
 	user/main.c \
 	user/controller.c
@@ -17,7 +21,9 @@ USER_OBJECTS := \
 CPPFLAGS := -I$(CURDIR)/include
 CFLAGS := -Wall -Wextra -Wpedantic -std=c11 -O2
 
-.PHONY: all module user rebuild clean clean-module clean-user \
+TEST_CPPFLAGS := $(CPPFLAGS) -I$(CURDIR)/tests/include
+
+.PHONY: all module user tests test-control-plane rebuild clean clean-module clean-user \
 	load unload reload logs controller test
 
 all: module user
@@ -48,6 +54,34 @@ $(USER_BUILD_DIR)/controller.o: user/controller.c user/controller.h \
 
 $(CONTROLLER): $(USER_OBJECTS)
 	$(CC) $(USER_OBJECTS) -o $(CONTROLLER)
+
+#
+# Programmi di test user-space
+#
+tests: $(TEST_CONTROL_PLANE)
+
+test-control-plane: module tests
+	./tests/run_test.sh $(TEST_CONTROL_PLANE)
+
+$(TEST_BUILD_DIR):
+	mkdir -p $(TEST_BUILD_DIR)
+
+$(TEST_COMMON_OBJECT): tests/test_common.c \
+                       tests/include/test_common.h \
+                       | $(TEST_BUILD_DIR)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_BUILD_DIR)/test_control_plane.o: \
+        tests/test_control_plane.c \
+        tests/include/test_common.h \
+        include/syscall_throttle_ioctl.h \
+        | $(TEST_BUILD_DIR)
+	$(CC) $(TEST_CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_CONTROL_PLANE): \
+        $(TEST_BUILD_DIR)/test_control_plane.o \
+        $(TEST_COMMON_OBJECT)
+	$(CC) $^ -o $@
 
 #
 # Pulizia e ricompilazione
