@@ -174,7 +174,8 @@ logs:
 controller: user
 	sudo $(CONTROLLER) $(ARGS)
 
-test: user
-	sudo $(CONTROLLER) ping
-	sudo $(CONTROLLER) get-max
-	sudo $(CONTROLLER) monitor-status
+test:
+	$(MAKE) test-control-plane
+	$(MAKE) test-registries
+	$(MAKE) test-throttling
+	$(MAKE) test-concurrency
