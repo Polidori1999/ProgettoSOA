@@ -47,6 +47,7 @@ void test_expect_u32(
 
 
 uint64_t test_monotonic_time_ns(void);
+void test_sleep_ms(unsigned int milliseconds);
 void test_set_thread_name(const char *name);
 long test_invoke_syscall(long syscall_number);
 

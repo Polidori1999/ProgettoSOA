@@ -290,3 +290,21 @@ void test_fixture_cleanup(
 
     test_close_device(fixture->fd);
 }
+
+void test_sleep_ms(unsigned int milliseconds)
+{
+    struct timespec duration;
+
+    duration.tv_sec = milliseconds / 1000U;
+    duration.tv_nsec =
+        (long)(milliseconds % 1000U) * 1000000L;
+
+    while (nanosleep(&duration, &duration) != 0) {
+        if (errno != EINTR) {
+            test_fail(
+                "nanosleep fallita: %s",
+                strerror(errno)
+            );
+        }
+    }
+}
