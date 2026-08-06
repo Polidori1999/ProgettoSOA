@@ -49,32 +49,6 @@ run_as_root()
     "${SUDO[@]}" "$@"
 }
 
-build_project()
-{
-    log "BUILD"
-
-    (
-        cd "$PROJECT_ROOT"
-        make rebuild
-    )
-
-    [[ -f "$MODULE_PATH" ]] ||
-        fail "modulo non generato: $MODULE_PATH"
-
-    [[ -x "$CONTROLLER" ]] ||
-        fail "controller non generato: $CONTROLLER"
-
-    pass "build completata"
-}
-
-clean_build_artifacts()
-{
-    (
-        cd "$PROJECT_ROOT"
-        make clean >/dev/null
-    )
-}
-
 module_loaded()
 {
     lsmod |
@@ -153,25 +127,4 @@ check_new_dmesg_errors()
     fi
 
     pass "nessun errore critico in dmesg"
-}
-
-cleanup_test_environment()
-{
-    local cleanup_result=0
-
-    set +e
-
-    unload_module
-    if (( $? != 0 )); then
-        cleanup_result=1
-    fi
-
-    clean_build_artifacts
-    if (( $? != 0 )); then
-        cleanup_result=1
-    fi
-
-    set -e
-
-    return "$cleanup_result"
 }

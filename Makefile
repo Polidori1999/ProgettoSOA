@@ -64,7 +64,7 @@ $(CONTROLLER): $(USER_OBJECTS)
 #
 tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING) $(TEST_CONCURRENCY) $(TEST_REVALIDATION)
 
-test-control-plane: module tests
+test-control-plane: module $(TEST_CONTROL_PLANE)
 	./tests/run_test.sh $(TEST_CONTROL_PLANE)
 
 .PHONY: test-registries
