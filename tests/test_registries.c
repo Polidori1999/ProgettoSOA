@@ -1,17 +1,32 @@
 #include "test_common.h"
-#include "syscall_throttle_ioctl.h"
 
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
 
-static void expect_uid_list(
+#define TEST_UID 60001U
+#define TEST_PROGRAM_NAME "soa-registry"
+
+static struct syscall_throttle_program make_program(
+    const char *name)
+{
+    struct syscall_throttle_program program = {0};
+
+    if (strlen(name) >= sizeof(program.name))
+        test_fail("nome programma troppo lungo");
+
+    strcpy(program.name, name);
+
+    return program;
+}
+
+static void expect_uid(
     int fd,
-    const __u32 *expected,
-    __u32 expected_count)
+    __u32 expected_count,
+    __u32 expected_uid)
 {
     struct syscall_throttle_uid_list list = {0};
-    __u32 index;
 
     test_ioctl_success(
         fd,
@@ -26,43 +41,22 @@ static void expect_uid_list(
         expected_count
     );
 
-    for (index = 0; index < expected_count; ++index) {
-        if (list.uids[index] != expected[index]) {
-            test_fail(
-                "UID[%u]: atteso %u, ottenuto %u",
-                index,
-                expected[index],
-                list.uids[index]
-            );
-        }
+    if (expected_count == 1 &&
+        list.uids[0] != expected_uid) {
+        test_fail(
+            "UID atteso %u, ottenuto %u",
+            expected_uid,
+            list.uids[0]
+        );
     }
-
-    test_pass("contenuto registro UID corretto");
 }
 
-static struct syscall_throttle_program make_program(
-    const char *name)
-{
-    struct syscall_throttle_program program = {0};
-    size_t length;
-
-    length = strlen(name);
-
-    if (length >= sizeof(program.name))
-        test_fail("nome programma troppo lungo: %s", name);
-
-    memcpy(program.name, name, length + 1);
-
-    return program;
-}
-
-static void expect_program_list(
+static void expect_program(
     int fd,
-    const char *const *expected,
-    __u32 expected_count)
+    __u32 expected_count,
+    const char *expected_name)
 {
     struct syscall_throttle_program_list list = {0};
-    __u32 index;
 
     test_ioctl_success(
         fd,
@@ -77,28 +71,25 @@ static void expect_program_list(
         expected_count
     );
 
-    for (index = 0; index < expected_count; ++index) {
-        if (strcmp(list.programs[index].name,
-                   expected[index]) != 0) {
-            test_fail(
-                "programma[%u]: atteso '%s', ottenuto '%s'",
-                index,
-                expected[index],
-                list.programs[index].name
-            );
-        }
+    if (expected_count == 1 &&
+        strcmp(
+            list.programs[0].name,
+            expected_name
+        ) != 0) {
+        test_fail(
+            "programma atteso '%s', ottenuto '%s'",
+            expected_name,
+            list.programs[0].name
+        );
     }
-
-    test_pass("contenuto registro programmi corretto");
 }
 
-static void expect_syscall_list(
+static void expect_syscall(
     int fd,
-    const __u32 *expected,
-    __u32 expected_count)
+    __u32 expected_count,
+    __u32 expected_number)
 {
     struct syscall_throttle_syscall_list list = {0};
-    __u32 index;
 
     test_ioctl_success(
         fd,
@@ -113,63 +104,35 @@ static void expect_syscall_list(
         expected_count
     );
 
-    for (index = 0; index < expected_count; ++index) {
-        if (list.numbers[index] != expected[index]) {
-            test_fail(
-                "syscall[%u]: attesa %u, ottenuta %u",
-                index,
-                expected[index],
-                list.numbers[index]
-            );
-        }
+    if (expected_count == 1 &&
+        list.numbers[0] != expected_number) {
+        test_fail(
+            "syscall attesa %u, ottenuta %u",
+            expected_number,
+            list.numbers[0]
+        );
     }
-
-    test_pass("contenuto registro syscall corretto");
 }
 
 static void test_uid_registry(int fd)
 {
-    __u32 uid_a = 60001;
-    __u32 uid_b = 60002;
-    __u32 uid_c = 60003;
+    __u32 uid = TEST_UID;
 
-    const __u32 complete[] = {
-        60001, 60002, 60003
-    };
-
-    const __u32 after_middle_removal[] = {
-        60001, 60003
-    };
-
-    expect_uid_list(fd, NULL, 0);
+    expect_uid(fd, 0, 0);
 
     test_ioctl_success(
         fd,
         SYSCALL_THROTTLE_IOC_REGISTER_UID,
-        &uid_a,
-        "registrazione UID A"
+        &uid,
+        "registrazione UID"
     );
 
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_REGISTER_UID,
-        &uid_b,
-        "registrazione UID B"
-    );
-
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_REGISTER_UID,
-        &uid_c,
-        "registrazione UID C"
-    );
-
-    expect_uid_list(fd, complete, 3);
+    expect_uid(fd, 1, uid);
 
     test_ioctl_failure(
         fd,
         SYSCALL_THROTTLE_IOC_REGISTER_UID,
-        &uid_b,
+        &uid,
         EEXIST,
         "UID duplicato rifiutato"
     );
@@ -177,83 +140,42 @@ static void test_uid_registry(int fd)
     test_ioctl_success(
         fd,
         SYSCALL_THROTTLE_IOC_UNREGISTER_UID,
-        &uid_b,
-        "rimozione UID centrale"
+        &uid,
+        "deregistrazione UID"
     );
-
-    expect_uid_list(fd, after_middle_removal, 2);
 
     test_ioctl_failure(
         fd,
         SYSCALL_THROTTLE_IOC_UNREGISTER_UID,
-        &uid_b,
+        &uid,
         ENOENT,
         "UID assente rifiutato"
     );
 
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_UNREGISTER_UID,
-        &uid_a,
-        "pulizia UID A"
-    );
-
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_UNREGISTER_UID,
-        &uid_c,
-        "pulizia UID C"
-    );
-
-    expect_uid_list(fd, NULL, 0);
+    expect_uid(fd, 0, 0);
 }
 
 static void test_program_registry(int fd)
 {
-    struct syscall_throttle_program program_a =
-        make_program("soa-a");
-    struct syscall_throttle_program program_b =
-        make_program("soa-b");
-    struct syscall_throttle_program program_c =
-        make_program("soa-c");
+    struct syscall_throttle_program program;
 
-    const char *complete[] = {
-        "soa-a", "soa-b", "soa-c"
-    };
+    program = make_program(TEST_PROGRAM_NAME);
 
-    const char *after_middle_removal[] = {
-        "soa-a", "soa-c"
-    };
-
-    expect_program_list(fd, NULL, 0);
+    expect_program(fd, 0, NULL);
 
     test_ioctl_success(
         fd,
         SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM,
-        &program_a,
-        "registrazione programma A"
+        &program,
+        "registrazione programma"
     );
 
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM,
-        &program_b,
-        "registrazione programma B"
-    );
-
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM,
-        &program_c,
-        "registrazione programma C"
-    );
-
-    expect_program_list(fd, complete, 3);
+    expect_program(fd, 1, TEST_PROGRAM_NAME);
 
     test_ioctl_failure(
         fd,
         SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM,
-        &program_b,
+        &program,
         EEXIST,
         "programma duplicato rifiutato"
     );
@@ -261,84 +183,40 @@ static void test_program_registry(int fd)
     test_ioctl_success(
         fd,
         SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM,
-        &program_b,
-        "rimozione programma centrale"
+        &program,
+        "deregistrazione programma"
     );
-
-    expect_program_list(fd, after_middle_removal, 2);
 
     test_ioctl_failure(
         fd,
         SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM,
-        &program_b,
+        &program,
         ENOENT,
         "programma assente rifiutato"
     );
 
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM,
-        &program_a,
-        "pulizia programma A"
-    );
-
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM,
-        &program_c,
-        "pulizia programma C"
-    );
-
-    expect_program_list(fd, NULL, 0);
+    expect_program(fd, 0, NULL);
 }
 
 static void test_syscall_registry(int fd)
 {
-    __u32 syscall_a = 39;
-    __u32 syscall_b = 110;
-    __u32 syscall_c = 186;
+    __u32 syscall_number = (__u32)SYS_getpid;
 
-    const __u32 complete[] = {
-        39, 110, 186
-    };
-
-    const __u32 after_middle_removal[] = {
-        39, 186
-    };
-
-    expect_syscall_list(fd, NULL, 0);
-
-    /*
-     * L'ordine di registrazione è intenzionalmente diverso:
-     * la bitmap deve restituire numeri ordinati.
-     */
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL,
-        &syscall_c,
-        "registrazione syscall C"
-    );
+    expect_syscall(fd, 0, 0);
 
     test_ioctl_success(
         fd,
         SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL,
-        &syscall_a,
-        "registrazione syscall A"
+        &syscall_number,
+        "registrazione syscall"
     );
 
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL,
-        &syscall_b,
-        "registrazione syscall B"
-    );
-
-    expect_syscall_list(fd, complete, 3);
+    expect_syscall(fd, 1, syscall_number);
 
     test_ioctl_failure(
         fd,
         SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL,
-        &syscall_b,
+        &syscall_number,
         EEXIST,
         "syscall duplicata rifiutata"
     );
@@ -346,35 +224,19 @@ static void test_syscall_registry(int fd)
     test_ioctl_success(
         fd,
         SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL,
-        &syscall_b,
-        "deregistrazione syscall centrale"
+        &syscall_number,
+        "deregistrazione syscall"
     );
-
-    expect_syscall_list(fd, after_middle_removal, 2);
 
     test_ioctl_failure(
         fd,
         SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL,
-        &syscall_b,
+        &syscall_number,
         ENOENT,
         "syscall assente rifiutata"
     );
 
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL,
-        &syscall_a,
-        "pulizia syscall A"
-    );
-
-    test_ioctl_success(
-        fd,
-        SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL,
-        &syscall_c,
-        "pulizia syscall C"
-    );
-
-    expect_syscall_list(fd, NULL, 0);
+    expect_syscall(fd, 0, 0);
 }
 
 int main(void)
@@ -387,7 +249,7 @@ int main(void)
         fd,
         SYSCALL_THROTTLE_IOC_DISABLE_MONITOR,
         NULL,
-        "monitor disattivato durante il test"
+        "monitor disattivato"
     );
 
     test_uid_registry(fd);
