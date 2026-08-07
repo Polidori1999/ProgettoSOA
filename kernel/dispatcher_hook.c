@@ -10,13 +10,7 @@
 #include <linux/ptrace.h>
 #include <linux/types.h>
 #include <linux/wait.h>
-
-
-
 #include <linux/kernel.h>
-
-
-
 #include <linux/uidgid.h>
 #include <linux/user_namespace.h>
 

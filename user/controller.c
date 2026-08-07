@@ -411,9 +411,9 @@ int syscall_throttle_controller_run(int argc, char *argv[]) {
 
             perror("ioctl GET_STATS fallito");
             status = 1;
-                } else {
-                    print_statistics(&statistics);
-                }
+        } else {
+            print_statistics(&statistics);
+        }
     }
 
     /*
