@@ -11,3 +11,5 @@ kernel/*.order
 kernel/*.symvers
 kernel/.*.cmd
 kernel/.tmp_versions/
+
+build/
