@@ -30,12 +30,21 @@ Il progetto supporta:
 - raccolta delle statistiche richieste dalla specifica;
 - controller user-space per configurare e interrogare il modulo;
 - suite automatica di test user-space.
+- demo riproducibili dei principali comportamenti del monitor.
 
 ## Struttura del repository
 
 ```text
 .
 ├── Makefile
+├── demos/
+│   ├── demo_prog.c
+│   ├── demo_concurrency.c
+│   ├── run_demo1.sh
+│   ├── run_demo2.sh
+│   ├── run_demo3.sh
+│   ├── run_demo4.sh
+│   └── run_demo5.sh
 ├── include/
 │   └── syscall_throttle_ioctl.h
 ├── kernel/
@@ -72,6 +81,7 @@ Le directory principali hanno i seguenti ruoli:
 - `include/`: interfaccia condivisa tra kernel-space e user-space, incluse strutture dati e richieste `ioctl`;
 - `kernel/`: implementazione del modulo, dei registri, del monitor, dell’intercettazione delle system call e delle statistiche;
 - `user/`: controller user-space utilizzato per configurare e interrogare il modulo;
+- `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor;
 - `tests/`: infrastruttura e test automatici del comportamento del sistema.
 
 ## Requisiti
@@ -303,6 +313,94 @@ Con `MAX=1`, il test di throttling osserva un ritardo di circa un secondo sulla 
 Il test di rivalidazione verifica inoltre che `monitor-off` risvegli immediatamente un waiter senza attendere la finestra successiva.
 
 Al termine di ogni test viene verificato che il modulo sia scaricato e che non siano comparsi errori kernel critici.
+
+
+## Demo
+
+Il repository include alcune demo pensate per mostrare in modo diretto e leggibile i principali comportamenti del monitor.
+
+Le demo configurano automaticamente il modulo, eseguono il caso di interesse e ripristinano la configurazione al termine. Possono essere avviate tramite i corrispondenti target del `Makefile`.
+
+### Demo 1 — Matching tramite nome del programma
+
+```bash
+make demo1
+```
+
+Configura `MAX=1`, registra il programma `demo_prog` e la system call `getpid`.
+
+Il programma esegue più invocazioni consecutive di `getpid()`. La prima può procedere immediatamente, mentre le successive vengono ritardate fino all'apertura delle finestre temporali successive.
+
+La demo mostra quindi il matching basato sul nome del task Linux (`comm`).
+
+### Demo 2 — Matching tramite EUID
+
+```bash
+make demo2
+```
+
+Verifica il secondo ramo della condizione di matching utilizzando un EUID registrato e lasciando vuoto il registro dei programmi.
+
+La demo utilizza l'account dedicato `throttle_demo`, creandolo se necessario, e confronta l'esecuzione dello stesso programma con:
+
+- EUID registrato, soggetto al throttling;
+- EUID non registrato, non soggetto al throttling.
+
+In questo modo viene mostrato che programma ed EUID costituiscono criteri alternativi di selezione.
+
+### Demo 3 — Concorrenza e statistiche
+
+```bash
+make demo3
+```
+
+Avvia tre worker concorrenti che eseguono `getpid()` con `MAX=1`.
+
+Poiché il limite è globale, una sola system call controllata può utilizzare il budget disponibile in ciascuna finestra. I worker completano quindi su finestre temporali differenti.
+
+Al termine vengono mostrate anche le statistiche del monitor, tra cui:
+
+- picco dei thread contemporaneamente bloccati;
+- media dei thread bloccati;
+- massimo ritardo osservato;
+- UID associato al massimo ritardo;
+- programma associato al massimo ritardo.
+
+### Demo 4 — Rivalidazione dopo `monitor-off`
+
+```bash
+make demo4
+```
+
+Configura il monitor in modo da ottenere almeno un thread realmente bloccato e verifica tramite le statistiche che sia presente un waiter.
+
+Il monitor viene quindi disattivato mentre il thread è in attesa.
+
+Il waiter viene risvegliato, rivalida la configurazione corrente e può procedere senza attendere l'apertura della finestra temporale successiva.
+
+### Demo 5 — Privilegi
+
+```bash
+make demo5
+```
+
+Mostra la distinzione tra operazioni di consultazione e operazioni di modifica della configurazione.
+
+I comandi read-only, come `get-max`, `monitor-status` e `stats`, vengono eseguiti senza privilegi di root.
+
+Una modifica della configurazione eseguita da un utente non privilegiato viene invece rifiutata, mentre la stessa operazione eseguita con effective UID pari a `0` viene accettata.
+
+### Esecuzione di tutte le demo
+
+Le cinque demo possono essere eseguite in sequenza con:
+
+```bash
+make demo-all
+```
+
+Poiché le demo caricano il modulo kernel e modificano temporaneamente la configurazione del monitor, durante l'esecuzione può essere richiesta l'autenticazione tramite `sudo`.
+
+
 
 ## Statistiche
 
