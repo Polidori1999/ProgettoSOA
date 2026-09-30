@@ -83,6 +83,18 @@ Per compilare ed eseguire il progetto sono necessari:
 - header del kernel corrispondenti al kernel in esecuzione, disponibili tramite `/lib/modules/$(uname -r)/build`;
 - privilegi di root per caricare/scaricare il modulo e per modificare la configurazione del monitor.
 
+
+## Ambiente di sviluppo e test
+
+Il progetto è stato sviluppato e testato nel seguente ambiente:
+
+- **Distribuzione:** Ubuntu 25.10 (Questing Quokka)
+- **Kernel:** Linux 6.17.0-41-generic
+- **Architettura:** x86-64
+- **Compilatore:** GCC 15.2.0
+
+
+
 ## Compilazione
 
 Per compilare sia il modulo kernel sia il controller user-space:
