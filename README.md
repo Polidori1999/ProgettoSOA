@@ -158,7 +158,7 @@ build/syscall_throttle_ctl
 Può essere invocato direttamente, ad esempio:
 
 ```bash
-sudo ./build/syscall_throttle_ctl ping
+./build/syscall_throttle_ctl ping
 ```
 
 oppure tramite il target `controller` del `Makefile`:
@@ -198,7 +198,7 @@ stats
 Il valore corrente di `MAX` può essere letto con:
 
 ```bash
-sudo ./build/syscall_throttle_ctl get-max
+./build/syscall_throttle_ctl get-max
 ```
 
 e modificato con:
@@ -214,7 +214,7 @@ Il monitor può essere attivato, disattivato e interrogato con:
 ```bash
 sudo ./build/syscall_throttle_ctl monitor-on
 sudo ./build/syscall_throttle_ctl monitor-off
-sudo ./build/syscall_throttle_ctl monitor-status
+./build/syscall_throttle_ctl monitor-status
 ```
 
 ### Registrazione degli elementi controllati
@@ -230,9 +230,9 @@ sudo ./build/syscall_throttle_ctl syscall-add 39
 Gli elementi registrati possono essere visualizzati con:
 
 ```bash
-sudo ./build/syscall_throttle_ctl uid-list
-sudo ./build/syscall_throttle_ctl program-list
-sudo ./build/syscall_throttle_ctl syscall-list
+./build/syscall_throttle_ctl uid-list
+./build/syscall_throttle_ctl program-list
+./build/syscall_throttle_ctl syscall-list
 ```
 
 e rimossi con i corrispondenti comandi `uid-remove`, `program-remove` e `syscall-remove`.
@@ -311,7 +311,7 @@ Il modulo mantiene statistiche globali relative al comportamento del monitor.
 Il comando:
 
 ```bash
-sudo ./build/syscall_throttle_ctl stats
+./build/syscall_throttle_ctl stats
 ```
 
 permette di visualizzare:
@@ -328,12 +328,12 @@ Il numero medio di thread bloccati è calcolato rispetto al solo intervallo temp
 
 ## Avvertenze operative
 
-Il throttling viene applicato realmente ai processi che soddisfano la configurazione del monitor. Una configurazione molto restrittiva può quindi rallentare fortemente i processi interessati.
+Il throttling viene applicato realmente ai thread le cui invocazioni soddisfano la configurazione del monitor. Di conseguenza, una configurazione particolarmente restrittiva può avere effetti visibili sul comportamento dei processi interessati.
 
-In particolare, è sconsigliato registrare l’UID della propria sessione grafica insieme a una system call molto frequente e utilizzare contemporaneamente un valore di `MAX` molto basso, ad esempio `MAX=1`.
+È necessario prestare particolare attenzione quando viene registrato un EUID. In questo caso il controllo non riguarda un singolo programma, ma potenzialmente tutti i processi eseguiti con quell’effective UID che invocano una delle system call registrate.
 
-In questo caso molti processi appartenenti allo stesso utente possono essere sottoposti contemporaneamente al limite, rendendo l’ambiente grafico temporaneamente poco responsivo o apparentemente bloccato.
+Poiché `MAX` è un limite globale condiviso tra tutte le invocazioni controllate, registrare l’EUID della propria sessione utente insieme a una system call molto frequente e impostare un valore di `MAX` molto basso, ad esempio `MAX=1`, può causare il blocco temporaneo di numerosi processi contemporaneamente. In un ambiente desktop questo può rendere l’interfaccia grafica fortemente rallentata o temporaneamente non responsiva.
 
-Per i test basati sugli UID è preferibile utilizzare un account o un UID isolato, oppure eseguire le prove in una macchina virtuale.
+Per questo motivo, le prove basate sul matching tramite EUID dovrebbero essere eseguite preferibilmente utilizzando un account dedicato, un UID isolato oppure una macchina virtuale.
 
-Questo comportamento non rappresenta un errore del modulo: è una conseguenza della configurazione di throttling applicata all’intero effective UID registrato.
+Questo comportamento è una conseguenza diretta della semantica del monitor e non indica un malfunzionamento del modulo: tutti i processi che soddisfano i criteri configurati competono per lo stesso budget globale di system call disponibile nella finestra temporale corrente.
