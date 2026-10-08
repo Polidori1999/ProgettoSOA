@@ -14,6 +14,74 @@
 
 #define DEVICE_PATH "/dev/syscall_throttle"
 
+/* Descrive ogni comando una sola volta: nome, ioctl e argomento. */
+enum argument_kind {
+    ARG_NONE,
+    ARG_MAX,
+    ARG_UID,
+    ARG_PROGRAM,
+    ARG_SYSCALL
+};
+
+struct controller_command {
+    const char *name;
+    unsigned long request;
+    enum argument_kind argument;
+    const char *error_message;
+};
+
+static const struct controller_command commands[] = {
+    {"ping", SYSCALL_THROTTLE_IOC_PING, ARG_NONE, "ioctl PING fallito"},
+    {"get-max", SYSCALL_THROTTLE_IOC_GET_MAX, ARG_NONE, "ioctl GET_MAX fallito"},
+    {"set-max", SYSCALL_THROTTLE_IOC_SET_MAX, ARG_MAX, "ioctl SET_MAX fallito"},
+    {"monitor-on", SYSCALL_THROTTLE_IOC_ENABLE_MONITOR, ARG_NONE,
+     "ioctl ENABLE_MONITOR fallito"},
+    {"monitor-off", SYSCALL_THROTTLE_IOC_DISABLE_MONITOR, ARG_NONE,
+     "ioctl DISABLE_MONITOR fallito"},
+    {"monitor-status", SYSCALL_THROTTLE_IOC_GET_MONITOR, ARG_NONE,
+     "ioctl GET_MONITOR fallito"},
+    {"uid-add", SYSCALL_THROTTLE_IOC_REGISTER_UID, ARG_UID,
+     "ioctl REGISTER_UID fallito"},
+    {"uid-remove", SYSCALL_THROTTLE_IOC_UNREGISTER_UID, ARG_UID,
+     "ioctl UNREGISTER_UID fallito"},
+    {"uid-list", SYSCALL_THROTTLE_IOC_GET_UIDS, ARG_NONE, "ioctl GET_UIDS fallito"},
+    {"program-add", SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM, ARG_PROGRAM,
+     "ioctl REGISTER_PROGRAM fallito"},
+    {"program-remove", SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM, ARG_PROGRAM,
+     "ioctl UNREGISTER_PROGRAM fallito"},
+    {"program-list", SYSCALL_THROTTLE_IOC_GET_PROGRAMS, ARG_NONE,
+     "ioctl GET_PROGRAMS fallito"},
+    {"syscall-add", SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL, ARG_SYSCALL,
+     "ioctl REGISTER_SYSCALL fallito"},
+    {"syscall-remove", SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL, ARG_SYSCALL,
+     "ioctl UNREGISTER_SYSCALL fallito"},
+    {"syscall-list", SYSCALL_THROTTLE_IOC_GET_SYSCALLS, ARG_NONE,
+     "ioctl GET_SYSCALLS fallito"},
+    {"stats", SYSCALL_THROTTLE_IOC_GET_STATS, ARG_NONE, "ioctl GET_STATS fallito"}
+};
+
+/* La stessa invocazione utilizza un solo tipo di payload. */
+union controller_data {
+    __u32 value;
+    struct syscall_throttle_program program;
+    struct syscall_throttle_uid_list uids;
+    struct syscall_throttle_program_list programs;
+    struct syscall_throttle_syscall_list syscalls;
+    struct syscall_throttle_statistics statistics;
+};
+
+static const struct controller_command *find_command(const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(commands) / sizeof(commands[0]); ++i) {
+        if (strcmp(name, commands[i].name) == 0)
+            return &commands[i];
+    }
+
+    return NULL;
+}
+
 static void print_usage(const char *program_name)
 {
     fprintf(stderr, "Uso:\n");
@@ -147,278 +215,165 @@ static void print_statistics(
     );
 }
 
-int syscall_throttle_controller_run(int argc, char *argv[]) {
-    struct syscall_throttle_uid_list uid_list;
-    struct syscall_throttle_program program;
-    struct syscall_throttle_program_list program_list;
-    struct syscall_throttle_syscall_list syscall_list;
-    struct syscall_throttle_statistics statistics;
-    __u32 value;
-    __u32 i;
-    int fd;
-    int status;
+static int validate_arguments(const struct controller_command *command,
+                              int argc, char *argv[],
+                              union controller_data *data)
+{
+    const char *error_message;
 
-    /*
-     * Prima fase: validazione del comando e dei suoi argomenti.
-     * Il device non viene ancora aperto.
-     */
-    if (argc < 2) {
+    if (command->argument == ARG_NONE) {
+        if (argc == 2)
+            return 0;
         print_usage(argv[0]);
-        return 1;
+        return -1;
     }
 
-    if (strcmp(argv[1], "set-max") == 0) {
-        if (argc != 3 ||
-            parse_u32(argv[2], 1U, &value) != 0) {
-            fprintf(stderr,
-                    "Errore: MAX deve essere un intero positivo.\n");
-            return 1;
-        }
-    } else if (strcmp(argv[1], "uid-add") == 0 ||
-               strcmp(argv[1], "uid-remove") == 0) {
-        if (argc != 3 ||
-            parse_u32(argv[2], 0U, &value) != 0) {
-            fprintf(stderr,
-                    "Errore: UID non valido.\n");
-            return 1;
-        }
-    } else if (strcmp(argv[1], "program-add") == 0 ||
-               strcmp(argv[1], "program-remove") == 0) {
-        if (argc != 3 ||
-            parse_program_name(argv[2], &program) != 0) {
-            fprintf(stderr,
-                    "Errore: il nome deve contenere "
-                    "da 1 a 15 caratteri.\n");
-            return 1;
-        }
-    } else if (strcmp(argv[1], "syscall-add") == 0 ||
-               strcmp(argv[1], "syscall-remove") == 0) {
-        if (argc != 3 ||
-            parse_u32(argv[2], 0U, &value) != 0) {
-            fprintf(stderr,
-                    "Errore: numero di syscall non valido.\n");
-            return 1;
-        }
-    } else if (strcmp(argv[1], "ping") == 0 ||
-               strcmp(argv[1], "get-max") == 0 ||
-               strcmp(argv[1], "monitor-on") == 0 ||
-               strcmp(argv[1], "monitor-off") == 0 ||
-               strcmp(argv[1], "monitor-status") == 0 ||
-               strcmp(argv[1], "uid-list") == 0 ||
-               strcmp(argv[1], "program-list") == 0 ||
-               strcmp(argv[1], "syscall-list") == 0 ||
-               strcmp(argv[1], "stats") == 0) {
-        if (argc != 2) {
-            print_usage(argv[0]);
-            return 1;
-        }
+    if (command->argument == ARG_PROGRAM) {
+        if (argc == 3 && parse_program_name(argv[2], &data->program) == 0)
+            return 0;
+        error_message = "Errore: il nome deve contenere da 1 a 15 caratteri.";
     } else {
+        __u32 minimum = command->argument == ARG_MAX ? 1U : 0U;
+
+        if (argc == 3 && parse_u32(argv[2], minimum, &data->value) == 0)
+            return 0;
+
+        switch (command->argument) {
+        case ARG_MAX:
+            error_message = "Errore: MAX deve essere un intero positivo.";
+            break;
+        case ARG_UID:
+            error_message = "Errore: UID non valido.";
+            break;
+        default:
+            error_message = "Errore: numero di syscall non valido.";
+            break;
+        }
+    }
+
+    fprintf(stderr, "%s\n", error_message);
+    return -1;
+}
+
+static void *ioctl_argument(unsigned long request, union controller_data *data)
+{
+    switch (request) {
+    case SYSCALL_THROTTLE_IOC_PING:
+    case SYSCALL_THROTTLE_IOC_ENABLE_MONITOR:
+    case SYSCALL_THROTTLE_IOC_DISABLE_MONITOR:
+        return NULL;
+    case SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM:
+    case SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM:
+        return &data->program;
+    case SYSCALL_THROTTLE_IOC_GET_UIDS:
+        return &data->uids;
+    case SYSCALL_THROTTLE_IOC_GET_PROGRAMS:
+        return &data->programs;
+    case SYSCALL_THROTTLE_IOC_GET_SYSCALLS:
+        return &data->syscalls;
+    case SYSCALL_THROTTLE_IOC_GET_STATS:
+        return &data->statistics;
+    default:
+        return &data->value;
+    }
+}
+
+static void print_result(unsigned long request, const union controller_data *data)
+{
+    __u32 i;
+
+    switch (request) {
+    case SYSCALL_THROTTLE_IOC_PING:
+        printf("PING completato correttamente.\n");
+        break;
+    case SYSCALL_THROTTLE_IOC_GET_MAX:
+        printf("MAX corrente: %u\n", data->value);
+        break;
+    case SYSCALL_THROTTLE_IOC_SET_MAX:
+        printf("MAX impostato a %u.\n", data->value);
+        break;
+    case SYSCALL_THROTTLE_IOC_ENABLE_MONITOR:
+        printf("Monitor attivato.\n");
+        break;
+    case SYSCALL_THROTTLE_IOC_DISABLE_MONITOR:
+        printf("Monitor disattivato.\n");
+        break;
+    case SYSCALL_THROTTLE_IOC_GET_MONITOR:
+        printf("Monitor: %s\n", data->value ? "attivo" : "disattivo");
+        break;
+    case SYSCALL_THROTTLE_IOC_REGISTER_UID:
+    case SYSCALL_THROTTLE_IOC_UNREGISTER_UID:
+        printf("UID %u %s.\n", data->value,
+               request == SYSCALL_THROTTLE_IOC_REGISTER_UID ?
+               "registrato" : "deregistrato");
+        break;
+    case SYSCALL_THROTTLE_IOC_GET_UIDS:
+        printf("UID registrati: %u\n", data->uids.count);
+        if (data->uids.count == 0)
+            printf("  nessuno\n");
+        for (i = 0; i < data->uids.count; ++i)
+            printf("  %u\n", data->uids.uids[i]);
+        break;
+    case SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM:
+    case SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM:
+        printf("Programma '%s' %s.\n", data->program.name,
+               request == SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM ?
+               "registrato" : "deregistrato");
+        break;
+    case SYSCALL_THROTTLE_IOC_GET_PROGRAMS:
+        printf("Programmi registrati: %u\n", data->programs.count);
+        if (data->programs.count == 0)
+            printf("  nessuno\n");
+        for (i = 0; i < data->programs.count; ++i)
+            printf("  %s\n", data->programs.programs[i].name);
+        break;
+    case SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL:
+    case SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL:
+        printf("Syscall %u %s.\n", data->value,
+               request == SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL ?
+               "registrata" : "deregistrata");
+        break;
+    case SYSCALL_THROTTLE_IOC_GET_SYSCALLS:
+        printf("Syscall registrate: %u\n", data->syscalls.count);
+        if (data->syscalls.count == 0)
+            printf("  nessuna\n");
+        for (i = 0; i < data->syscalls.count; ++i)
+            printf("  %u\n", data->syscalls.numbers[i]);
+        break;
+    case SYSCALL_THROTTLE_IOC_GET_STATS:
+        print_statistics(&data->statistics);
+        break;
+    }
+}
+
+int syscall_throttle_controller_run(int argc, char *argv[])
+{
+    const struct controller_command *command;
+    union controller_data data = {0};
+    int fd;
+    int status = 0;
+
+    if (argc < 2 || (command = find_command(argv[1])) == NULL) {
         print_usage(argv[0]);
         return 1;
     }
 
-    /*
-     * Seconda fase: apertura del device.
-     */
+    if (validate_arguments(command, argc, argv, &data) != 0)
+        return 1;
+
     fd = open(DEVICE_PATH, O_RDWR);
     if (fd == -1) {
         perror("Impossibile aprire " DEVICE_PATH);
         return 1;
     }
 
-    status = 0;
-
-    /*
-     * Terza fase: esecuzione dell'ioctl associato al comando.
-     */
-    if (strcmp(argv[1], "ping") == 0) {
-        if (ioctl(fd, SYSCALL_THROTTLE_IOC_PING) == -1) {
-            perror("ioctl PING fallito");
-            status = 1;
-        } else {
-            printf("PING completato correttamente.\n");
-        }
-    } else if (strcmp(argv[1], "get-max") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_GET_MAX,
-                  &value) == -1) {
-            perror("ioctl GET_MAX fallito");
-            status = 1;
-        } else {
-            printf("MAX corrente: %u\n", value);
-        }
-    } else if (strcmp(argv[1], "set-max") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_SET_MAX,
-                  &value) == -1) {
-            perror("ioctl SET_MAX fallito");
-            status = 1;
-        } else {
-            printf("MAX impostato a %u.\n", value);
-        }
-    } else if (strcmp(argv[1], "monitor-on") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_ENABLE_MONITOR) == -1) {
-            perror("ioctl ENABLE_MONITOR fallito");
-            status = 1;
-        } else {
-            printf("Monitor attivato.\n");
-        }
-    } else if (strcmp(argv[1], "monitor-off") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_DISABLE_MONITOR) == -1) {
-            perror("ioctl DISABLE_MONITOR fallito");
-            status = 1;
-        } else {
-            printf("Monitor disattivato.\n");
-        }
-    } else if (strcmp(argv[1], "monitor-status") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_GET_MONITOR,
-                  &value) == -1) {
-            perror("ioctl GET_MONITOR fallito");
-            status = 1;
-        } else {
-            printf("Monitor: %s\n",
-                   value != 0 ? "attivo" : "disattivo");
-        }
-    } else if (strcmp(argv[1], "uid-add") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_REGISTER_UID,
-                  &value) == -1) {
-            perror("ioctl REGISTER_UID fallito");
-            status = 1;
-        } else {
-            printf("UID %u registrato.\n", value);
-        }
-    } else if (strcmp(argv[1], "uid-remove") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_UNREGISTER_UID,
-                  &value) == -1) {
-            perror("ioctl UNREGISTER_UID fallito");
-            status = 1;
-        } else {
-            printf("UID %u deregistrato.\n", value);
-        }
-    } else if (strcmp(argv[1], "uid-list") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_GET_UIDS,
-                  &uid_list) == -1) {
-            perror("ioctl GET_UIDS fallito");
-            status = 1;
-        } else {
-            printf("UID registrati: %u\n", uid_list.count);
-
-            if (uid_list.count == 0) {
-                printf("  nessuno\n");
-            } else {
-                for (i = 0; i < uid_list.count; ++i) {
-                    printf("  %u\n", uid_list.uids[i]);
-                }
-            }
-        }
-    } else if (strcmp(argv[1], "program-add") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_REGISTER_PROGRAM,
-                  &program) == -1) {
-            perror("ioctl REGISTER_PROGRAM fallito");
-            status = 1;
-        } else {
-            printf("Programma '%s' registrato.\n",
-                   program.name);
-        }
-        } else if (strcmp(argv[1], "program-remove") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_UNREGISTER_PROGRAM,
-                  &program) == -1) {
-            perror("ioctl UNREGISTER_PROGRAM fallito");
-            status = 1;
-        } else {
-            printf("Programma '%s' deregistrato.\n",
-                   program.name);
-        }
-
-    } else if (strcmp(argv[1], "program-list") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_GET_PROGRAMS,
-                  &program_list) == -1) {
-            perror("ioctl GET_PROGRAMS fallito");
-            status = 1;
-        } else {
-            printf("Programmi registrati: %u\n",
-                   program_list.count);
-
-            if (program_list.count == 0) {
-                printf("  nessuno\n");
-            } else {
-                for (i = 0; i < program_list.count; ++i) {
-                    printf("  %s\n",
-                           program_list.programs[i].name);
-                }
-            }
-        }
-
-    } else if (strcmp(argv[1], "syscall-add") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_REGISTER_SYSCALL,
-                  &value) == -1) {
-            perror("ioctl REGISTER_SYSCALL fallito");
-            status = 1;
-        } else {
-            printf("Syscall %u registrata.\n", value);
-        }
-
-    } else if (strcmp(argv[1], "syscall-remove") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_UNREGISTER_SYSCALL,
-                  &value) == -1) {
-            perror("ioctl UNREGISTER_SYSCALL fallito");
-            status = 1;
-        } else {
-            printf("Syscall %u deregistrata.\n", value);
-        }
-
-    } else if (strcmp(argv[1], "syscall-list") == 0) {
-        if (ioctl(fd,
-                  SYSCALL_THROTTLE_IOC_GET_SYSCALLS,
-                  &syscall_list) == -1) {
-            perror("ioctl GET_SYSCALLS fallito");
-            status = 1;
-        } else {
-            printf("Syscall registrate: %u\n",
-                   syscall_list.count);
-
-            if (syscall_list.count == 0) {
-                printf("  nessuna\n");
-            } else {
-                for (i = 0; i < syscall_list.count; ++i) {
-                    printf("  %u\n",
-                           syscall_list.numbers[i]);
-                }
-            }
-        }
-    } else if (strcmp(argv[1], "stats") == 0) {
-        memset(
-            &statistics,
-            0,
-            sizeof(statistics)
-        );
-
-        if (ioctl(
-                fd,
-                SYSCALL_THROTTLE_IOC_GET_STATS,
-                &statistics) == -1) {
-
-            perror("ioctl GET_STATS fallito");
-            status = 1;
-        } else {
-            print_statistics(&statistics);
-        }
+    if (ioctl(fd, command->request, ioctl_argument(command->request, &data)) == -1) {
+        perror(command->error_message);
+        status = 1;
+    } else {
+        print_result(command->request, &data);
     }
 
-    /*
-     * La chiusura viene eseguita per qualunque comando.
-     */
     if (close(fd) == -1) {
         perror("Chiusura del device fallita");
         status = 1;
