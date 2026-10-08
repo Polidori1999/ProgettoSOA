@@ -183,14 +183,16 @@ static void print_statistics(
         average_blocked_threads
     );
 
+    /* Conversione per la stampa; il kernel mantiene i nanosecondi. */
     printf(
-        "Tempo totale monitor attivo: %" PRIu64 " ns\n",
-        (uint64_t)stats->monitor_enabled_time_ns
+        "Tempo totale monitor attivo: %.3f s\n",
+        (double)stats->monitor_enabled_time_ns / 1000000000.0
     );
 
+    /* Somma delle attese, espressa in thread-secondi. */
     printf(
-        "Tempo pesato di blocking: %" PRIu64 " ns\n",
-        (uint64_t)stats->weighted_blocking_time_ns
+        "Tempo pesato di blocking: %.3f thread*s\n",
+        (double)stats->weighted_blocking_time_ns / 1000000000.0
     );
 
     if (stats->peak_delay_valid == 0) {
@@ -199,10 +201,9 @@ static void print_statistics(
     }
 
     printf(
-        "Ritardo massimo: %" PRIu64 " ns (%.3f ms)\n",
-        (uint64_t)stats->peak_delay_ns,
-        (double)stats->peak_delay_ns / 1000000.0
-    );
+    "Ritardo massimo: %.3f ms\n",
+    (double)stats->peak_delay_ns / 1000000.0
+);
 
     printf(
         "UID associato al ritardo massimo: %u\n",
