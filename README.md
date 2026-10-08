@@ -29,7 +29,7 @@ Il progetto supporta:
 - gestione di system call bloccanti, non bloccanti e di system call che non ritornano al chiamante;
 - raccolta delle statistiche richieste dalla specifica;
 - controller user-space per configurare e interrogare il modulo;
-- suite automatica di test user-space.
+- suite automatica di test user-space;
 - demo riproducibili dei principali comportamenti del monitor.
 
 ## Struttura del repository
@@ -40,11 +40,13 @@ Il progetto supporta:
 ├── demos/
 │   ├── demo_prog.c
 │   ├── demo_concurrency.c
+│   ├── demo_blocking.c
 │   ├── run_demo1.sh
 │   ├── run_demo2.sh
 │   ├── run_demo3.sh
 │   ├── run_demo4.sh
-│   └── run_demo5.sh
+│   ├── run_demo5.sh
+│   └── run_demo6.sh
 ├── include/
 │   └── syscall_throttle_ioctl.h
 ├── kernel/
@@ -91,8 +93,11 @@ Per compilare ed eseguire il progetto sono necessari:
 - ambiente Linux x86-64;
 - toolchain C con `gcc` e `make`;
 - header del kernel corrispondenti al kernel in esecuzione, disponibili tramite `/lib/modules/$(uname -r)/build`;
-- privilegi di root per caricare/scaricare il modulo e per modificare la configurazione del monitor.
+- privilegi di root per caricare/scaricare il modulo e per modificare la configurazione del monitor;
+- supporto Kprobes e disponibilità dei simboli kernel `x64_sys_call`, `sys_call_table` e `kallsyms_lookup_name`;
+- `CONFIG_FRAME_POINTER=y`, richiesto dall’attuale gestione dello stack nel trampoline assembly.
 
+I programmi controllati e le operazioni di consultazione non richiedono privilegi di root. La compatibilità del modulo è stata verificata nell’ambiente indicato sotto; l’intercettazione utilizza funzioni interne del kernel.
 
 ## Ambiente di sviluppo e test
 
@@ -102,8 +107,7 @@ Il progetto è stato sviluppato e testato nel seguente ambiente:
 - **Kernel:** Linux 6.17.0-41-generic
 - **Architettura:** x86-64
 - **Compilatore:** GCC 15.2.0
-
-
+- **Frame pointer:** `CONFIG_FRAME_POINTER=y`
 
 ## Compilazione
 
@@ -122,8 +126,11 @@ build/syscall_throttle_ctl
 Per ricompilare il progetto da zero:
 
 ```bash
-make rebuild
+make clean
+make
 ```
+
+È disponibile anche il target `make rebuild`.
 
 Per rimuovere gli artefatti generati:
 
@@ -229,6 +236,10 @@ sudo ./build/syscall_throttle_ctl monitor-off
 
 ### Registrazione degli elementi controllati
 
+Il registro dei programmi confronta il nome del task Linux (`comm`), ottenuto con `get_task_comm()`. L’interfaccia accetta da 1 a 15 caratteri significativi più il terminatore nullo. Il nome è modificabile e può differire tra thread dello stesso processo.
+
+È possibile registrare fino a 64 UID e 64 nomi di programmi. I numeri delle system call si riferiscono alla ABI x86-64 nativa.
+
 Esempi di registrazione:
 
 ```bash
@@ -262,7 +273,11 @@ syscall registrata && (programma registrato || EUID registrato)
 
 Il limite `MAX` è globale: rappresenta il numero massimo complessivo di system call controllate che possono essere eseguite durante una finestra temporale di un secondo.
 
-Le finestre temporali sono consecutive, non sovrapposte e gestite autonomamente dal kernel tramite un timer. All’inizio di una nuova finestra il conteggio delle invocazioni viene azzerato e i thread eventualmente in attesa vengono risvegliati.
+Le finestre temporali sono consecutive, non sovrapposte e gestite autonomamente dal kernel tramite un timer monotono. La prima finestra parte all’attivazione del monitor. All’inizio di una nuova finestra il conteggio delle invocazioni viene azzerato e i thread eventualmente in attesa vengono risvegliati.
+
+Il budget è condiviso tra tutti i programmi, EUID e numeri di syscall selezionati. Il limite riguarda le ammissioni alla syscall reale, non il numero di syscall contemporaneamente in esecuzione. Una syscall bloccante può quindi continuare ad attendere dati dopo essere stata ammessa.
+
+Il controllo non usa una finestra scorrevole: due chiamate possono essere ammesse a breve distanza se appartengono a finestre consecutive.
 
 Quando `MAX` viene raggiunto, le ulteriori invocazioni controllate non eseguono immediatamente la system call reale, ma il thread chiamante viene temporaneamente sospeso.
 
@@ -276,7 +291,11 @@ Al risveglio, il thread rivaluta completamente la configurazione corrente. In pa
 
 Questo permette, ad esempio, a un thread già bloccato di procedere se nel frattempo il monitor viene disattivato o la sua invocazione non risulta più soggetta al controllo.
 
-Quando il monitor è disattivato, nessun limite viene applicato alle system call e le invocazioni procedono normalmente.
+Quando il monitor è disattivato, nessun limite viene applicato alle system call e le invocazioni procedono normalmente. `monitor-off` risveglia i waiter senza attendere il tick successivo.
+
+`monitor-on` è idempotente: se il monitor è già attivo, non azzera la quota consumata e non riavvia il timer. Dopo una disattivazione, una nuova attivazione apre una finestra con quota vuota.
+
+Le modifiche di MAX e dei registri sono rivalutate dai thread già bloccati al successivo risveglio; queste modifiche non provocano da sole un risveglio immediato.
 
 Non viene imposto un ordine FIFO tra i thread in attesa: dopo ogni risveglio i thread competono nuovamente per la possibilità di eseguire la system call.
 
@@ -314,12 +333,19 @@ Il test di rivalidazione verifica inoltre che `monitor-off` risvegli immediatame
 
 Al termine di ogni test viene verificato che il modulo sia scaricato e che non siano comparsi errori kernel critici.
 
-
 ## Demo
 
 Il repository include alcune demo pensate per mostrare in modo diretto e leggibile i principali comportamenti del monitor.
 
-Le demo configurano automaticamente il modulo, eseguono il caso di interesse e ripristinano la configurazione al termine. Possono essere avviate tramite i corrispondenti target del `Makefile`.
+Prima delle demo, compilare il progetto dalla sua cartella principale:
+
+```bash
+make
+```
+
+Le demo compilano il relativo programma user-space, scaricano e ricaricano il modulo per partire da uno stato iniziale, configurano il caso di interesse e disattivano il monitor al termine. Le registrazioni aggiunte vengono rimosse dagli script. La configurazione precedente al ricaricamento del modulo non viene conservata.
+
+Le demo possono essere avviate tramite i corrispondenti target del `Makefile`. Per la demo 5 usare una sessione non-root, poiché viene confrontata la modifica senza privilegi con quella eseguita tramite `sudo`.
 
 ### Demo 1 — Matching tramite nome del programma
 
@@ -390,17 +416,35 @@ I comandi read-only, come `get-max`, `monitor-status` e `stats`, vengono eseguit
 
 Una modifica della configurazione eseguita da un utente non privilegiato viene invece rifiutata, mentre la stessa operazione eseguita con effective UID pari a `0` viene accettata.
 
+### Demo 6 — System call bloccante: `read` su pipe
+
+```bash
+make demo6
+```
+
+Configura `MAX=1`, registra la syscall `read` (numero 0 su x86-64) e il nome del reader `soa-read-demo`. Il programma `demo_blocking.c` esegue due letture di un byte dalla stessa pipe. Un writer fornisce i due byte dopo circa 200 ms.
+
+Il confronto tra monitor OFF e ON distingue l’attesa dei dati dall’attesa imposta dal monitor:
+
+| Operazione | Monitor OFF | Monitor ON |
+|---|---|---|
+| Prima `read`, pipe inizialmente vuota | Attesa dei dati, circa 200 ms | Attesa dei dati, circa 200 ms |
+| Seconda `read`, con un byte già disponibile | Completamento immediato | Attesa della nuova finestra, circa altri 800 ms |
+| Picco dei waiter del monitor | 0 | 1 |
+
+Prima della seconda lettura il programma mostra che nella pipe rimane un byte. Il ritardo della seconda `read` con monitor ON è quindi dovuto alla quota esaurita. Il writer consulta anche il numero dei waiter: l’attesa della prima lettura per i dati non viene conteggiata come blocking del monitor.
+
+I tempi sono indicativi e dipendono dalla fase della finestra e dallo scheduling. Nell’esecuzione osservata, la seconda lettura con monitor ON ha impiegato circa 794 ms e il ritardo massimo del monitor è risultato coerente con tale attesa.
+
 ### Esecuzione di tutte le demo
 
-Le cinque demo possono essere eseguite in sequenza con:
+Le sei demo possono essere eseguite in sequenza con:
 
 ```bash
 make demo-all
 ```
 
 Poiché le demo caricano il modulo kernel e modificano temporaneamente la configurazione del monitor, durante l'esecuzione può essere richiesta l'autenticazione tramite `sudo`.
-
-
 
 ## Statistiche
 
@@ -422,7 +466,17 @@ permette di visualizzare:
 - UID associato al massimo ritardo;
 - nome del programma associato al massimo ritardo.
 
-Il numero medio di thread bloccati è calcolato rispetto al solo intervallo temporale durante il quale il monitor è attivo.
+Il numero medio di thread bloccati è una media temporale, calcolata rispetto ai soli intervalli durante i quali il monitor è attivo:
+
+```text
+media = weighted_blocking_time_ns / monitor_enabled_time_ns
+```
+
+Il numeratore è l’integrale temporale del numero di thread in attesa nel monitor. Gli intervalli con monitor attivo e nessun waiter contribuiscono al denominatore con contributo nullo al numeratore.
+
+Il ritardo massimo misura il tempo tra l’ingresso nello stato di attesa del monitor e la sua uscita prima di proseguire verso la syscall reale. Non include l’eventuale attesa dei dati durante l’esecuzione della syscall. Il picco viene aggiornato per le attese concluse con prosecuzione verso la syscall; se non ne è stata completata alcuna, viene mostrato «non disponibile».
+
+Le statistiche sono cumulative dalla vita del modulo: `monitor-off` non le azzera e una modifica di MAX non apre una nuova raccolta statistica. Scaricare e ricaricare il modulo permette di iniziare una nuova osservazione.
 
 ## Avvertenze operative
 

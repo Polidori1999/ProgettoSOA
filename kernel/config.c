@@ -87,6 +87,15 @@ long syscall_throttle_config_enable_monitor(void)
     mutex_lock(&monitor_state_lock);
 
     /*
+     * Un monitor-on ripetuto non deve riaprire la
+     * finestra né azzerare il budget già consumato.
+     */
+    if (READ_ONCE(monitor_enabled)) {
+        mutex_unlock(&monitor_state_lock);
+        return 0;
+    }
+
+    /*
      * Il monitor riparte sempre da una finestra vuota.
      */
     syscall_throttle_accounting_reset();

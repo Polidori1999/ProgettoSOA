@@ -70,7 +70,9 @@ static bool peak_delay_valid;
  * Aggiorna gli integrali temporali fino a now_ns.
  *
  * La funzione deve essere chiamata con
- * statistics_lock già acquisito.
+ * statistics_lock già acquisito e now_ns deve essere
+ * letto dopo l'acquisizione dello stesso lock, così
+ * i timestamp seguono l'ordine degli aggiornamenti.
  */
 static void syscall_throttle_statistics_update_time(
     u64 now_ns)
@@ -101,12 +103,12 @@ void syscall_throttle_statistics_monitor_state_changed(
     unsigned long flags;
     u64 now_ns;
 
-    now_ns = ktime_get_ns();
-
     spin_lock_irqsave(
         &statistics_lock,
         flags
     );
+
+    now_ns = ktime_get_ns();
 
     /*
      * Prima contabilizza l'intervallo appartenente allo
@@ -128,12 +130,12 @@ u64 syscall_throttle_statistics_block_enter(void)
     unsigned long flags;
     u64 now_ns;
 
-    now_ns = ktime_get_ns();
-
     spin_lock_irqsave(
         &statistics_lock,
         flags
     );
+
+    now_ns = ktime_get_ns();
 
     syscall_throttle_statistics_update_time(now_ns);
 
@@ -164,17 +166,17 @@ void syscall_throttle_statistics_block_exit(
     u64 delay_ns;
     u64 now_ns;
 
+    spin_lock_irqsave(
+        &statistics_lock,
+        flags
+    );
+
     now_ns = ktime_get_ns();
 
     if (now_ns >= blocked_since_ns)
         delay_ns = now_ns - blocked_since_ns;
     else
         delay_ns = 0;
-
-    spin_lock_irqsave(
-        &statistics_lock,
-        flags
-    );
 
     syscall_throttle_statistics_update_time(now_ns);
 
@@ -211,12 +213,12 @@ long syscall_throttle_statistics_get(unsigned long arg)
 
     memset(&snapshot, 0, sizeof(snapshot));
 
-    now_ns = ktime_get_ns();
-
     spin_lock_irqsave(
         &statistics_lock,
         flags
     );
+
+    now_ns = ktime_get_ns();
 
     /*
      * Include nello snapshot anche il tempo trascorso

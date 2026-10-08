@@ -32,7 +32,7 @@ TEST_CPPFLAGS := $(CPPFLAGS) -I$(CURDIR)/tests/include
 	test-concurrency test-revalidation test \
 	rebuild clean clean-module clean-user \
 	load unload reload logs controller \
-	demo1 demo2 demo3 demo4 demo5 demo-all
+	demo1 demo2 demo3 demo4 demo5 demo6 demo-all
 
 all: module user
 
@@ -217,9 +217,13 @@ demo4:
 demo5:
 	./demos/run_demo5.sh
 
+demo6:
+	./demos/run_demo6.sh
+
 demo-all:
 	$(MAKE) demo1
 	$(MAKE) demo2
 	$(MAKE) demo3
 	$(MAKE) demo4
 	$(MAKE) demo5
+	$(MAKE) demo6
