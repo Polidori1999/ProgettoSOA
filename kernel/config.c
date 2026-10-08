@@ -52,6 +52,11 @@ long syscall_throttle_config_set_max(unsigned long arg)
     if (value == 0)
         return -EINVAL;
 
+    /*
+     * Aggiorna il limite senza azzerare la quota già consumata.
+     * I thread in attesa lo rileggeranno alla prossima valutazione;
+     * questa operazione non provoca un risveglio immediato.
+     */
     WRITE_ONCE(max_syscalls_per_second, value);
 
     pr_info("syscall_throttle: MAX impostato a %u\n", value);
@@ -89,6 +94,7 @@ long syscall_throttle_config_enable_monitor(void)
     /*
      * Un monitor-on ripetuto non deve riaprire la
      * finestra né azzerare il budget già consumato.
+     * La verifica è sotto mutex per serializzare anche richieste on concorrenti.
      */
     if (READ_ONCE(monitor_enabled)) {
         mutex_unlock(&monitor_state_lock);
@@ -114,6 +120,7 @@ long syscall_throttle_config_enable_monitor(void)
      */
     syscall_throttle_engine_monitor_enabled();
 
+    /* Pubblica ON solo dopo aver preparato accounting, statistiche e timer. */
     WRITE_ONCE(monitor_enabled, true);
 
     pr_info(
@@ -139,6 +146,7 @@ long syscall_throttle_config_disable_monitor(void)
     /*
      * Prima impediamo ai nuovi dispatcher di entrare
      * nel percorso di accounting.
+     * I dispatcher già in corso verificano nuovamente lo stato prima di attendere.
      */
     WRITE_ONCE(monitor_enabled, false);
 
@@ -187,6 +195,7 @@ long syscall_throttle_config_get_monitor(unsigned long arg)
     return 0;
 }
 
+/* Letture del percorso syscall: non acquisiscono il mutex delle transizioni. */
 __u32 syscall_throttle_config_max_value(void)
 {
     return READ_ONCE(max_syscalls_per_second);

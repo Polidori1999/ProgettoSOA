@@ -13,6 +13,8 @@
 
 /*
  * Protegge tutto lo stato statistico globale.
+ * I totali e i picchi sono cumulativi dalla creazione del modulo:
+ * monitor-off li conserva e monitor-on riprende l'osservazione.
  *
  * Le sezioni critiche sono brevi e non contengono
  * operazioni bloccanti.
@@ -37,12 +39,12 @@ static u64 last_update_ns;
 
 /*
  * Indica se il tempo corrente appartiene a un intervallo
- * durante il quale il monitor è attivo.
+ * durante il quale il monitor Ã¨ attivo.
  */
 static bool monitor_observation_active;
 
 /*
- * Tempo cumulativo durante il quale il monitor è stato
+ * Tempo cumulativo durante il quale il monitor Ã¨ stato
  * attivo. I periodi monitor-off vengono esclusi.
  */
 static u64 monitor_enabled_time_ns;
@@ -51,6 +53,8 @@ static u64 monitor_enabled_time_ns;
  * Integrale temporale del numero di task bloccati:
  *
  * current_blocked_threads * intervallo temporale.
+ * Esempio: 2 thread per 0,5 secondi contribuiscono 1 thread-secondo.
+ * Il controller divide questo totale per il tempo di monitor attivo.
  */
 static u64 weighted_blocking_time_ns;
 
@@ -70,8 +74,8 @@ static bool peak_delay_valid;
  * Aggiorna gli integrali temporali fino a now_ns.
  *
  * La funzione deve essere chiamata con
- * statistics_lock già acquisito e now_ns deve essere
- * letto dopo l'acquisizione dello stesso lock, così
+ * statistics_lock giÃ  acquisito e now_ns deve essere
+ * letto dopo l'acquisizione dello stesso lock, cosÃ¬
  * i timestamp seguono l'ordine degli aggiornamenti.
  */
 static void syscall_throttle_statistics_update_time(
@@ -84,6 +88,7 @@ static void syscall_throttle_statistics_update_time(
         return;
     }
 
+    /* Il timestamp Ã¨ letto sotto lock: gli aggiornamenti seguono l'ordine temporale. */
     elapsed_ns = now_ns - last_update_ns;
 
     if (monitor_observation_active) {
@@ -139,6 +144,7 @@ u64 syscall_throttle_statistics_block_enter(void)
 
     syscall_throttle_statistics_update_time(now_ns);
 
+    /* Il tempo precedente Ã¨ giÃ  contabilizzato con il vecchio numero di thread. */
     ++current_blocked_threads;
 
     if (current_blocked_threads >
@@ -180,9 +186,11 @@ void syscall_throttle_statistics_block_exit(
 
     syscall_throttle_statistics_update_time(now_ns);
 
+    /* Anche in uscita si contabilizza prima l'intervallo, poi si riduce il numero. */
     if (current_blocked_threads > 0)
         --current_blocked_threads;
 
+    /* Le attese interrotte da un segnale non aggiornano il ritardo massimo. */
     if (syscall_will_execute &&
         (!peak_delay_valid ||
          delay_ns > peak_delay_ns)) {
@@ -211,6 +219,7 @@ long syscall_throttle_statistics_get(unsigned long arg)
     unsigned long flags;
     u64 now_ns;
 
+    /* Azzera anche campi inutilizzati e padding prima di copiarli in user space. */
     memset(&snapshot, 0, sizeof(snapshot));
 
     spin_lock_irqsave(
@@ -263,6 +272,7 @@ long syscall_throttle_statistics_get(unsigned long arg)
         flags
     );
 
+    /* La copia puÃ² causare page fault: va eseguita dopo il rilascio dello spinlock. */
     if (copy_to_user(
             (void __user *)arg,
             &snapshot,
