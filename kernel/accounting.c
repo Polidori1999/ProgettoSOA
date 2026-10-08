@@ -4,8 +4,10 @@
 #include "accounting.h"
 
 /*
- * Protegge il numero globale di syscall già ammesse
+ * Protegge il numero globale di syscall giÃ  ammesse
  * nella finestra corrente.
+ * Il timer puÃ² azzerarlo mentre altri CPU tentano di riservare un posto;
+ * irqsave evita anche interferenze con il callback sulla stessa CPU.
  */
 static DEFINE_RAW_SPINLOCK(accounting_lock);
 
@@ -50,15 +52,13 @@ void syscall_throttle_accounting_record(
 
     result->max = max;
 
-    if (window_count < max) {
+    /* Verifica e prenotazione sono atomiche rispetto agli altri thread. */
+    result->exceeded = window_count >= max;
+    if (!result->exceeded)
         ++window_count;
 
-        result->count = window_count;
-        result->exceeded = false;
-    } else {
-        result->count = window_count;
-        result->exceeded = true;
-    }
+    /* Conta solo le ammissioni: i tentativi senza quota non consumano posti. */
+    result->count = window_count;
 
     raw_spin_unlock_irqrestore(
         &accounting_lock,

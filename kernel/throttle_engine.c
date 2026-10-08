@@ -62,6 +62,19 @@ static atomic64_t window_generation =
 
 
 /*
+ * L'attesa viene annullata da shutdown, monitor-off o cambio di controllo.
+ * La generazione conserva l'evento off anche se segue subito un nuovo on.
+ * Non modifica il budget: decide soltanto se il task deve smettere di aspettare.
+ */
+static bool syscall_throttle_wait_cancelled(s64 observed_control_generation)
+{
+    return READ_ONCE(engine_shutting_down) ||
+           !syscall_throttle_config_monitor_enabled() ||
+           atomic64_read(&control_generation) != observed_control_generation;
+}
+
+
+/*
  * Callback della finestra periodica.
  *
  * Opera in contesto atomico:
@@ -117,7 +130,7 @@ void syscall_throttle_engine_monitor_enabled(void)
     hrtimer_cancel(&window_timer);
 
     /*
-     * La quota è già stata azzerata da config.c prima
+     * La quota Ã¨ giÃ  stata azzerata da config.c prima
      * di rendere attivo il monitor.
      */
     atomic64_inc(&window_generation);
@@ -148,8 +161,8 @@ bool syscall_throttle_engine_evaluate(
     memset(decision, 0, sizeof(*decision));
 
     /*
-     * Se il monitor è disattivato, la syscall non
-     * deve essere verificata né conteggiata.
+     * Se il monitor Ã¨ disattivato, la syscall non
+     * deve essere verificata nÃ© conteggiata.
      */
     if (!syscall_throttle_config_monitor_enabled())
         return false;
@@ -162,7 +175,7 @@ bool syscall_throttle_engine_evaluate(
         return false;
 
     /*
-     * La bitmap delle syscall è il controllo più
+     * La bitmap delle syscall Ã¨ il controllo piÃ¹
      * economico, quindi viene eseguito per primo.
      */
     if (!syscall_throttle_syscall_matches(
@@ -267,7 +280,7 @@ int syscall_throttle_engine_enforce(
         }
 
         /*
-         * La syscall ha ottenuto un posto e può essere
+         * La syscall ha ottenuto un posto e puÃ² essere
          * eseguita.
          */
         if (!decision->accounting.exceeded) {
@@ -279,10 +292,7 @@ int syscall_throttle_engine_enforce(
          * Un monitor-off potrebbe essere avvenuto tra
          * la lettura della generazione e l'accounting.
          */
-        if (READ_ONCE(engine_shutting_down) ||
-            !syscall_throttle_config_monitor_enabled() ||
-            atomic64_read(&control_generation) !=
-                observed_control_generation) {
+        if (syscall_throttle_wait_cancelled(observed_control_generation)) {
 
             result = 0;
             goto out;
@@ -331,13 +341,11 @@ int syscall_throttle_engine_enforce(
          * - shutdown del modulo;
          * - ricezione di un segnale.
          */
+        /* Il risveglio invita a riprovare: non assegna automaticamente un posto. */
         wait_result =
             wait_event_interruptible(
                 syscall_throttle_wait_queue,
-                READ_ONCE(engine_shutting_down) ||
-                !syscall_throttle_config_monitor_enabled() ||
-                atomic64_read(&control_generation) !=
-                    observed_control_generation ||
+                syscall_throttle_wait_cancelled(observed_control_generation) ||
                 atomic64_read(&window_generation) !=
                     observed_window_generation
             );
@@ -355,10 +363,7 @@ int syscall_throttle_engine_enforce(
          * Monitor-off e shutdown liberano il task e
          * permettono alla syscall originale di passare.
          */
-        if (READ_ONCE(engine_shutting_down) ||
-            !syscall_throttle_config_monitor_enabled() ||
-            atomic64_read(&control_generation) !=
-                observed_control_generation) {
+        if (syscall_throttle_wait_cancelled(observed_control_generation)) {
 
             result = 0;
             goto out;
@@ -388,7 +393,10 @@ out:
     /*
      * Uscita unica dallo stato bloccato.
      *
-     * result >= 0 significa che il dispatcher eseguirà
+     * Il tempo termina qui, prima dell'esecuzione della syscall: non include
+     * eventuali attese interne alla syscall originale.
+     *
+     * result >= 0 significa che il dispatcher eseguirÃ
      * comunque la syscall originale.
      */
     if (task_blocked) {
@@ -409,7 +417,7 @@ void syscall_throttle_engine_monitor_disabled(void)
 {
     /*
      * Cancella sincronicamente il timer. L'operazione
-     * è innocua anche quando il timer non è armato.
+     * Ã¨ innocua anche quando il timer non Ã¨ armato.
      */
     hrtimer_cancel(&window_timer);
 
