@@ -30,12 +30,21 @@ Il progetto supporta:
 - raccolta delle statistiche richieste dalla specifica;
 - controller user-space per configurare e interrogare il modulo;
 - suite automatica di test user-space.
+- demo riproducibili dei principali comportamenti del monitor.
 
 ## Struttura del repository
 
 ```text
 .
 ├── Makefile
+├── demos/
+│   ├── demo_prog.c
+│   ├── demo_concurrency.c
+│   ├── run_demo1.sh
+│   ├── run_demo2.sh
+│   ├── run_demo3.sh
+│   ├── run_demo4.sh
+│   └── run_demo5.sh
 ├── include/
 │   └── syscall_throttle_ioctl.h
 ├── kernel/
@@ -72,6 +81,7 @@ Le directory principali hanno i seguenti ruoli:
 - `include/`: interfaccia condivisa tra kernel-space e user-space, incluse strutture dati e richieste `ioctl`;
 - `kernel/`: implementazione del modulo, dei registri, del monitor, dell’intercettazione delle system call e delle statistiche;
 - `user/`: controller user-space utilizzato per configurare e interrogare il modulo;
+- `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor;
 - `tests/`: infrastruttura e test automatici del comportamento del sistema.
 
 ## Requisiti
@@ -82,6 +92,18 @@ Per compilare ed eseguire il progetto sono necessari:
 - toolchain C con `gcc` e `make`;
 - header del kernel corrispondenti al kernel in esecuzione, disponibili tramite `/lib/modules/$(uname -r)/build`;
 - privilegi di root per caricare/scaricare il modulo e per modificare la configurazione del monitor.
+
+
+## Ambiente di sviluppo e test
+
+Il progetto è stato sviluppato e testato nel seguente ambiente:
+
+- **Distribuzione:** Ubuntu 25.10 (Questing Quokka)
+- **Kernel:** Linux 6.17.0-41-generic
+- **Architettura:** x86-64
+- **Compilatore:** GCC 15.2.0
+
+
 
 ## Compilazione
 
@@ -146,7 +168,7 @@ build/syscall_throttle_ctl
 Può essere invocato direttamente, ad esempio:
 
 ```bash
-sudo ./build/syscall_throttle_ctl ping
+./build/syscall_throttle_ctl ping
 ```
 
 oppure tramite il target `controller` del `Makefile`:
@@ -186,7 +208,7 @@ stats
 Il valore corrente di `MAX` può essere letto con:
 
 ```bash
-sudo ./build/syscall_throttle_ctl get-max
+./build/syscall_throttle_ctl get-max
 ```
 
 e modificato con:
@@ -202,7 +224,7 @@ Il monitor può essere attivato, disattivato e interrogato con:
 ```bash
 sudo ./build/syscall_throttle_ctl monitor-on
 sudo ./build/syscall_throttle_ctl monitor-off
-sudo ./build/syscall_throttle_ctl monitor-status
+./build/syscall_throttle_ctl monitor-status
 ```
 
 ### Registrazione degli elementi controllati
@@ -218,9 +240,9 @@ sudo ./build/syscall_throttle_ctl syscall-add 39
 Gli elementi registrati possono essere visualizzati con:
 
 ```bash
-sudo ./build/syscall_throttle_ctl uid-list
-sudo ./build/syscall_throttle_ctl program-list
-sudo ./build/syscall_throttle_ctl syscall-list
+./build/syscall_throttle_ctl uid-list
+./build/syscall_throttle_ctl program-list
+./build/syscall_throttle_ctl syscall-list
 ```
 
 e rimossi con i corrispondenti comandi `uid-remove`, `program-remove` e `syscall-remove`.
@@ -292,6 +314,94 @@ Il test di rivalidazione verifica inoltre che `monitor-off` risvegli immediatame
 
 Al termine di ogni test viene verificato che il modulo sia scaricato e che non siano comparsi errori kernel critici.
 
+
+## Demo
+
+Il repository include alcune demo pensate per mostrare in modo diretto e leggibile i principali comportamenti del monitor.
+
+Le demo configurano automaticamente il modulo, eseguono il caso di interesse e ripristinano la configurazione al termine. Possono essere avviate tramite i corrispondenti target del `Makefile`.
+
+### Demo 1 — Matching tramite nome del programma
+
+```bash
+make demo1
+```
+
+Configura `MAX=1`, registra il programma `demo_prog` e la system call `getpid`.
+
+Il programma esegue più invocazioni consecutive di `getpid()`. La prima può procedere immediatamente, mentre le successive vengono ritardate fino all'apertura delle finestre temporali successive.
+
+La demo mostra quindi il matching basato sul nome del task Linux (`comm`).
+
+### Demo 2 — Matching tramite EUID
+
+```bash
+make demo2
+```
+
+Verifica il secondo ramo della condizione di matching utilizzando un EUID registrato e lasciando vuoto il registro dei programmi.
+
+La demo utilizza l'account dedicato `throttle_demo`, creandolo se necessario, e confronta l'esecuzione dello stesso programma con:
+
+- EUID registrato, soggetto al throttling;
+- EUID non registrato, non soggetto al throttling.
+
+In questo modo viene mostrato che programma ed EUID costituiscono criteri alternativi di selezione.
+
+### Demo 3 — Concorrenza e statistiche
+
+```bash
+make demo3
+```
+
+Avvia tre worker concorrenti che eseguono `getpid()` con `MAX=1`.
+
+Poiché il limite è globale, una sola system call controllata può utilizzare il budget disponibile in ciascuna finestra. I worker completano quindi su finestre temporali differenti.
+
+Al termine vengono mostrate anche le statistiche del monitor, tra cui:
+
+- picco dei thread contemporaneamente bloccati;
+- media dei thread bloccati;
+- massimo ritardo osservato;
+- UID associato al massimo ritardo;
+- programma associato al massimo ritardo.
+
+### Demo 4 — Rivalidazione dopo `monitor-off`
+
+```bash
+make demo4
+```
+
+Configura il monitor in modo da ottenere almeno un thread realmente bloccato e verifica tramite le statistiche che sia presente un waiter.
+
+Il monitor viene quindi disattivato mentre il thread è in attesa.
+
+Il waiter viene risvegliato, rivalida la configurazione corrente e può procedere senza attendere l'apertura della finestra temporale successiva.
+
+### Demo 5 — Privilegi
+
+```bash
+make demo5
+```
+
+Mostra la distinzione tra operazioni di consultazione e operazioni di modifica della configurazione.
+
+I comandi read-only, come `get-max`, `monitor-status` e `stats`, vengono eseguiti senza privilegi di root.
+
+Una modifica della configurazione eseguita da un utente non privilegiato viene invece rifiutata, mentre la stessa operazione eseguita con effective UID pari a `0` viene accettata.
+
+### Esecuzione di tutte le demo
+
+Le cinque demo possono essere eseguite in sequenza con:
+
+```bash
+make demo-all
+```
+
+Poiché le demo caricano il modulo kernel e modificano temporaneamente la configurazione del monitor, durante l'esecuzione può essere richiesta l'autenticazione tramite `sudo`.
+
+
+
 ## Statistiche
 
 Il modulo mantiene statistiche globali relative al comportamento del monitor.
@@ -299,7 +409,7 @@ Il modulo mantiene statistiche globali relative al comportamento del monitor.
 Il comando:
 
 ```bash
-sudo ./build/syscall_throttle_ctl stats
+./build/syscall_throttle_ctl stats
 ```
 
 permette di visualizzare:
@@ -316,12 +426,12 @@ Il numero medio di thread bloccati è calcolato rispetto al solo intervallo temp
 
 ## Avvertenze operative
 
-Il throttling viene applicato realmente ai processi che soddisfano la configurazione del monitor. Una configurazione molto restrittiva può quindi rallentare fortemente i processi interessati.
+Il throttling viene applicato realmente ai thread le cui invocazioni soddisfano la configurazione del monitor. Di conseguenza, una configurazione particolarmente restrittiva può avere effetti visibili sul comportamento dei processi interessati.
 
-In particolare, è sconsigliato registrare l’UID della propria sessione grafica insieme a una system call molto frequente e utilizzare contemporaneamente un valore di `MAX` molto basso, ad esempio `MAX=1`.
+È necessario prestare particolare attenzione quando viene registrato un EUID. In questo caso il controllo non riguarda un singolo programma, ma potenzialmente tutti i processi eseguiti con quell’effective UID che invocano una delle system call registrate.
 
-In questo caso molti processi appartenenti allo stesso utente possono essere sottoposti contemporaneamente al limite, rendendo l’ambiente grafico temporaneamente poco responsivo o apparentemente bloccato.
+Poiché `MAX` è un limite globale condiviso tra tutte le invocazioni controllate, registrare l’EUID della propria sessione utente insieme a una system call molto frequente e impostare un valore di `MAX` molto basso, ad esempio `MAX=1`, può causare il blocco temporaneo di numerosi processi contemporaneamente. In un ambiente desktop questo può rendere l’interfaccia grafica fortemente rallentata o temporaneamente non responsiva.
 
-Per i test basati sugli UID è preferibile utilizzare un account o un UID isolato, oppure eseguire le prove in una macchina virtuale.
+Per questo motivo, le prove basate sul matching tramite EUID dovrebbero essere eseguite preferibilmente utilizzando un account dedicato, un UID isolato oppure una macchina virtuale.
 
-Questo comportamento non rappresenta un errore del modulo: è una conseguenza della configurazione di throttling applicata all’intero effective UID registrato.
+Questo comportamento è una conseguenza diretta della semantica del monitor e non indica un malfunzionamento del modulo: tutti i processi che soddisfano i criteri configurati competono per lo stesso budget globale di system call disponibile nella finestra temporale corrente.
