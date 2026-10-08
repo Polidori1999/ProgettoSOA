@@ -27,8 +27,12 @@ CFLAGS := -Wall -Wextra -Wpedantic -std=c11 -O2
 
 TEST_CPPFLAGS := $(CPPFLAGS) -I$(CURDIR)/tests/include
 
-.PHONY: all module user tests test-control-plane rebuild clean clean-module clean-user \
-	load unload reload logs controller test
+.PHONY: all module user tests \
+	test-control-plane test-registries test-throttling \
+	test-concurrency test-revalidation test \
+	rebuild clean clean-module clean-user \
+	load unload reload logs controller \
+	demo1 demo2 demo3 demo4 demo5 demo-all
 
 all: module user
 
@@ -62,27 +66,20 @@ $(CONTROLLER): $(USER_OBJECTS)
 #
 # Programmi di test user-space
 #
-tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING) $(TEST_CONCURRENCY) $(TEST_REVALIDATION)
+tests: $(TEST_CONTROL_PLANE) $(TEST_REGISTRIES) $(TEST_THROTTLING) \
+       $(TEST_CONCURRENCY) $(TEST_REVALIDATION)
 
 test-control-plane: module $(TEST_CONTROL_PLANE)
 	./tests/run_test.sh $(TEST_CONTROL_PLANE)
 
-.PHONY: test-registries
-
 test-registries: module $(TEST_REGISTRIES)
 	./tests/run_test.sh $(TEST_REGISTRIES)
-
-.PHONY: test-throttling
 
 test-throttling: module $(TEST_THROTTLING)
 	./tests/run_test.sh $(TEST_THROTTLING)
 
-.PHONY: test-concurrency
-
 test-concurrency: module $(TEST_CONCURRENCY)
 	./tests/run_test.sh $(TEST_CONCURRENCY)
-
-.PHONY: test-revalidation
 
 test-revalidation: module $(TEST_REVALIDATION)
 	./tests/run_test.sh $(TEST_REVALIDATION)
@@ -156,6 +153,16 @@ $(TEST_REVALIDATION): \
 	$(CC) $^ -pthread -o $@
 
 #
+# Suite completa di test
+#
+test:
+	$(MAKE) test-control-plane
+	$(MAKE) test-registries
+	$(MAKE) test-throttling
+	$(MAKE) test-concurrency
+	$(MAKE) test-revalidation
+
+#
 # Pulizia e ricompilazione
 #
 rebuild: clean all
@@ -190,11 +197,29 @@ logs:
 # Controller
 #
 controller: user
-	sudo $(CONTROLLER) $(ARGS)
+	 $(CONTROLLER) $(ARGS)
 
-test:
-	$(MAKE) test-control-plane
-	$(MAKE) test-registries
-	$(MAKE) test-throttling
-	$(MAKE) test-concurrency
-	$(MAKE) test-revalidation
+#
+# Demo
+#
+demo1:
+	./demos/run_demo1.sh
+
+demo2:
+	./demos/run_demo2.sh
+
+demo3:
+	./demos/run_demo3.sh
+
+demo4:
+	./demos/run_demo4.sh
+
+demo5:
+	./demos/run_demo5.sh
+
+demo-all:
+	$(MAKE) demo1
+	$(MAKE) demo2
+	$(MAKE) demo3
+	$(MAKE) demo4
+	$(MAKE) demo5
