@@ -15,7 +15,7 @@
 
 
 /*
- * Ogni snapshot è immutabile dopo essere stato pubblicato.
+ * Ogni snapshot Ã¨ immutabile dopo essere stato pubblicato.
  *
  * Gli scrittori costruiscono un nuovo snapshot e lo
  * pubblicano tramite rcu_assign_pointer().
@@ -33,7 +33,7 @@ struct syscall_throttle_uid_snapshot {
 /*
  * Puntatore allo snapshot attualmente visibile.
  *
- * Inizialmente è NULL e rappresenta un registro vuoto.
+ * Inizialmente Ã¨ NULL e rappresenta un registro vuoto.
  */
 static struct syscall_throttle_uid_snapshot __rcu
     *active_uid_snapshot;
@@ -78,175 +78,94 @@ static void syscall_throttle_uid_copy_snapshot(
            source->count * sizeof(source->uids[0]));
 }
 
-long syscall_throttle_uid_register(unsigned long arg)
-{
-    struct syscall_throttle_uid_snapshot *new_snapshot;
-    struct syscall_throttle_uid_snapshot *old_snapshot;
-    __u32 raw_uid;
-    kuid_t uid;
-    long result;
-
-    if (!syscall_throttle_is_root())
-        return -EPERM;
-
-    if (copy_from_user(&raw_uid,
-                       (const void __user *)arg,
-                       sizeof(raw_uid)) != 0) {
-        return -EFAULT;
-    }
-
-    uid = make_kuid(current_user_ns(), raw_uid);
-
-    if (!uid_valid(uid))
-        return -EINVAL;
-
-    /*
-     * L'allocazione avviene prima di acquisire il mutex.
-     */
-    new_snapshot = kzalloc(sizeof(*new_snapshot),
-                           GFP_KERNEL);
-    if (new_snapshot == NULL)
-        return -ENOMEM;
-
-    result = 0;
-
-    mutex_lock(&uid_update_lock);
-
-    old_snapshot = rcu_dereference_protected(
-        active_uid_snapshot,
-        lockdep_is_held(&uid_update_lock)
-    );
-
-    if (syscall_throttle_uid_find(old_snapshot, uid) >= 0) {
-        result = -EEXIST;
-
-    } else if (old_snapshot != NULL &&
-               old_snapshot->count >=
-               SYSCALL_THROTTLE_MAX_REGISTERED_UIDS) {
-        result = -ENOSPC;
-
-    } else {
-        syscall_throttle_uid_copy_snapshot(
-            new_snapshot,
-            old_snapshot
-        );
-
-        new_snapshot->uids[new_snapshot->count] = uid;
-        ++new_snapshot->count;
-
-        /*
-         * Da questo momento i nuovi lettori vedono
-         * il nuovo snapshot.
-         */
-        rcu_assign_pointer(
-            active_uid_snapshot,
-            new_snapshot
-        );
-    }
-
-    mutex_unlock(&uid_update_lock);
-
-    if (result != 0) {
-        kfree(new_snapshot);
-        return result;
-    }
-
-    /*
-     * Attendiamo che tutti i lettori che potrebbero
-     * usare il vecchio snapshot abbiano terminato.
-     */
-    synchronize_rcu();
-
-    kfree(old_snapshot);
-
-    pr_info("syscall_throttle: UID %u registrato\n",
-            raw_uid);
-
-    return 0;
-}
-
-long syscall_throttle_uid_unregister(unsigned long arg)
+/*
+ * Percorso comune per aggiunta e rimozione: cambia solo la modifica alla copia.
+ * Lo snapshot pubblicato resta immutabile per i lettori RCU.
+ */
+static long syscall_throttle_uid_update(unsigned long arg, bool add)
 {
     struct syscall_throttle_uid_snapshot *new_snapshot;
     struct syscall_throttle_uid_snapshot *old_snapshot;
     __u32 raw_uid;
     kuid_t uid;
     int found_index;
-    long result;
+    long result = 0;
 
+    /* Il controllo dei privilegi precede anche la lettura dei dati utente. */
     if (!syscall_throttle_is_root())
         return -EPERM;
 
-    if (copy_from_user(&raw_uid,
-                       (const void __user *)arg,
-                       sizeof(raw_uid)) != 0) {
+    if (copy_from_user(&raw_uid, (const void __user *)arg,
+                       sizeof(raw_uid)) != 0)
         return -EFAULT;
-    }
 
+    /* Traduce l'UID del namespace chiamante nel tipo usato dal kernel. */
     uid = make_kuid(current_user_ns(), raw_uid);
-
     if (!uid_valid(uid))
         return -EINVAL;
 
-    new_snapshot = kzalloc(sizeof(*new_snapshot),
-                           GFP_KERNEL);
+    /* Alloca fuori dal mutex per ridurre il tempo di esclusione degli scrittori. */
+    new_snapshot = kzalloc(sizeof(*new_snapshot), GFP_KERNEL);
     if (new_snapshot == NULL)
         return -ENOMEM;
 
-    result = 0;
-
     mutex_lock(&uid_update_lock);
-
     old_snapshot = rcu_dereference_protected(
-        active_uid_snapshot,
-        lockdep_is_held(&uid_update_lock)
-    );
+        active_uid_snapshot, lockdep_is_held(&uid_update_lock));
+    found_index = syscall_throttle_uid_find(old_snapshot, uid);
 
-    found_index = syscall_throttle_uid_find(
-        old_snapshot,
-        uid
-    );
-
-    if (found_index < 0) {
+    /* Controlla gli errori senza modificare il registro corrente. */
+    if (add && found_index >= 0) {
+        result = -EEXIST;
+    } else if (add && old_snapshot != NULL &&
+               old_snapshot->count >= SYSCALL_THROTTLE_MAX_REGISTERED_UIDS) {
+        result = -ENOSPC;
+    } else if (!add && found_index < 0) {
         result = -ENOENT;
-
     } else {
-        syscall_throttle_uid_copy_snapshot(
-            new_snapshot,
-            old_snapshot
-        );
+        syscall_throttle_uid_copy_snapshot(new_snapshot, old_snapshot);
 
-        memmove(
-            &new_snapshot->uids[found_index],
-            &new_snapshot->uids[found_index + 1],
-            (new_snapshot->count -
-             (__u32)found_index -
-             1U) * sizeof(new_snapshot->uids[0])
-        );
+        if (add) {
+            new_snapshot->uids[new_snapshot->count] = uid;
+            ++new_snapshot->count;
+        } else {
+            /* Compatta gli elementi successivi, mantenendo il loro ordine. */
+            memmove(&new_snapshot->uids[found_index],
+                    &new_snapshot->uids[found_index + 1],
+                    (new_snapshot->count - (__u32)found_index - 1U) *
+                        sizeof(new_snapshot->uids[0]));
+            --new_snapshot->count;
+        }
 
-        --new_snapshot->count;
-
-        rcu_assign_pointer(
-            active_uid_snapshot,
-            new_snapshot
-        );
+        /* Pubblica la copia completa: i nuovi lettori possono consultarla. */
+        rcu_assign_pointer(active_uid_snapshot, new_snapshot);
     }
-
     mutex_unlock(&uid_update_lock);
 
     if (result != 0) {
+        /* La copia non Ã¨ stata pubblicata e puÃ² essere liberata subito. */
         kfree(new_snapshot);
         return result;
     }
 
+    /* Attende i lettori del vecchio snapshot prima di liberarlo, senza mutex. */
     synchronize_rcu();
-
     kfree(old_snapshot);
 
-    pr_info("syscall_throttle: UID %u deregistrato\n",
-            raw_uid);
-
+    pr_info("syscall_throttle: UID %u %s\n", raw_uid,
+            add ? "registrato" : "deregistrato");
     return 0;
+}
+
+/* Le funzioni pubbliche mantengono l'interfaccia usata dal driver ioctl. */
+long syscall_throttle_uid_register(unsigned long arg)
+{
+    return syscall_throttle_uid_update(arg, true);
+}
+
+long syscall_throttle_uid_unregister(unsigned long arg)
+{
+    return syscall_throttle_uid_update(arg, false);
 }
 
 long syscall_throttle_uid_get_list(unsigned long arg)
@@ -289,14 +208,12 @@ bool syscall_throttle_uid_matches(kuid_t uid)
     const struct syscall_throttle_uid_snapshot *snapshot;
     bool found;
 
-    found = false;
-
     rcu_read_lock();
 
     snapshot = rcu_dereference(active_uid_snapshot);
 
-    if (syscall_throttle_uid_find(snapshot, uid) >= 0)
-        found = true;
+    /* Legge il registro senza acquisire il mutex degli aggiornamenti. */
+    found = syscall_throttle_uid_find(snapshot, uid) >= 0;
 
     rcu_read_unlock();
 
@@ -324,7 +241,7 @@ void syscall_throttle_uid_registry_cleanup(void)
 
     /*
      * Prima di liberare lo snapshot attendiamo la fine
-     * degli eventuali lettori già entrati in RCU.
+     * degli eventuali lettori giÃ  entrati in RCU.
      */
     synchronize_rcu();
 

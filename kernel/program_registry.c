@@ -47,7 +47,7 @@ static int syscall_throttle_program_validate(
     const struct syscall_throttle_program *program)
 {
     /*
-     * Il nome non può essere vuoto.
+     * Il nome non puÃ² essere vuoto.
      */
     if (program->name[0] == '\0')
         return -EINVAL;
@@ -116,175 +116,88 @@ static void syscall_throttle_program_copy_snapshot(
                sizeof(source->programs[0]));
 }
 
-long syscall_throttle_program_register(unsigned long arg)
-{
-    struct syscall_throttle_program_snapshot *new_snapshot;
-    struct syscall_throttle_program_snapshot *old_snapshot;
-    struct syscall_throttle_program program;
-    int result;
-
-    if (!syscall_throttle_is_root())
-        return -EPERM;
-
-    result = syscall_throttle_program_copy_from_user(
-        arg,
-        &program
-    );
-
-    if (result != 0)
-        return result;
-
-    /*
-     * L'allocazione può dormire, quindi viene eseguita
-     * prima di acquisire il mutex degli scrittori.
-     */
-    new_snapshot = kzalloc(sizeof(*new_snapshot),
-                           GFP_KERNEL);
-    if (new_snapshot == NULL)
-        return -ENOMEM;
-
-    result = 0;
-
-    mutex_lock(&program_update_lock);
-
-    old_snapshot = rcu_dereference_protected(
-        active_program_snapshot,
-        lockdep_is_held(&program_update_lock)
-    );
-
-    if (syscall_throttle_program_find(
-            old_snapshot,
-            program.name) >= 0) {
-        result = -EEXIST;
-
-    } else if (old_snapshot != NULL &&
-               old_snapshot->count >=
-               SYSCALL_THROTTLE_MAX_REGISTERED_PROGRAMS) {
-        result = -ENOSPC;
-
-    } else {
-        syscall_throttle_program_copy_snapshot(
-            new_snapshot,
-            old_snapshot
-        );
-
-        new_snapshot->programs[new_snapshot->count] =
-            program;
-
-        ++new_snapshot->count;
-
-        /*
-         * I nuovi lettori vedranno il nuovo snapshot.
-         */
-        rcu_assign_pointer(
-            active_program_snapshot,
-            new_snapshot
-        );
-    }
-
-    mutex_unlock(&program_update_lock);
-
-    if (result != 0) {
-        kfree(new_snapshot);
-        return result;
-    }
-
-    /*
-     * Aspettiamo la conclusione degli eventuali lettori
-     * che stanno ancora usando il vecchio snapshot.
-     */
-    synchronize_rcu();
-
-    kfree(old_snapshot);
-
-    pr_info(
-        "syscall_throttle: programma '%s' registrato\n",
-        program.name
-    );
-
-    return 0;
-}
-
-long syscall_throttle_program_unregister(unsigned long arg)
+/*
+ * Percorso comune per aggiunta e rimozione: cambia solo la modifica alla copia.
+ * Lo snapshot pubblicato resta immutabile per i lettori RCU.
+ */
+static long syscall_throttle_program_update(unsigned long arg, bool add)
 {
     struct syscall_throttle_program_snapshot *new_snapshot;
     struct syscall_throttle_program_snapshot *old_snapshot;
     struct syscall_throttle_program program;
     int found_index;
-    int result;
+    long result = 0;
 
+    /* Il controllo dei privilegi precede anche la lettura dei dati utente. */
     if (!syscall_throttle_is_root())
         return -EPERM;
 
-    result = syscall_throttle_program_copy_from_user(
-        arg,
-        &program
-    );
-
+    result = syscall_throttle_program_copy_from_user(arg, &program);
     if (result != 0)
         return result;
 
-    new_snapshot = kzalloc(sizeof(*new_snapshot),
-                           GFP_KERNEL);
+    /* Alloca fuori dal mutex per ridurre il tempo di esclusione degli scrittori. */
+    new_snapshot = kzalloc(sizeof(*new_snapshot), GFP_KERNEL);
     if (new_snapshot == NULL)
         return -ENOMEM;
 
-    result = 0;
-
     mutex_lock(&program_update_lock);
-
     old_snapshot = rcu_dereference_protected(
-        active_program_snapshot,
-        lockdep_is_held(&program_update_lock)
-    );
+        active_program_snapshot, lockdep_is_held(&program_update_lock));
+    found_index = syscall_throttle_program_find(old_snapshot, program.name);
 
-    found_index = syscall_throttle_program_find(
-        old_snapshot,
-        program.name
-    );
-
-    if (found_index < 0) {
+    /* Controlla gli errori senza modificare il registro corrente. */
+    if (add && found_index >= 0) {
+        result = -EEXIST;
+    } else if (add && old_snapshot != NULL &&
+               old_snapshot->count >= SYSCALL_THROTTLE_MAX_REGISTERED_PROGRAMS) {
+        result = -ENOSPC;
+    } else if (!add && found_index < 0) {
         result = -ENOENT;
-
     } else {
-        syscall_throttle_program_copy_snapshot(
-            new_snapshot,
-            old_snapshot
-        );
+        syscall_throttle_program_copy_snapshot(new_snapshot, old_snapshot);
 
-        memmove(
-            &new_snapshot->programs[found_index],
-            &new_snapshot->programs[found_index + 1],
-            (new_snapshot->count -
-             (__u32)found_index -
-             1U) * sizeof(new_snapshot->programs[0])
-        );
+        if (add) {
+            new_snapshot->programs[new_snapshot->count] = program;
+            ++new_snapshot->count;
+        } else {
+            /* Compatta gli elementi successivi, mantenendo il loro ordine. */
+            memmove(&new_snapshot->programs[found_index],
+                    &new_snapshot->programs[found_index + 1],
+                    (new_snapshot->count - (__u32)found_index - 1U) *
+                        sizeof(new_snapshot->programs[0]));
+            --new_snapshot->count;
+        }
 
-        --new_snapshot->count;
-
-        rcu_assign_pointer(
-            active_program_snapshot,
-            new_snapshot
-        );
+        /* Pubblica la copia completa: i nuovi lettori possono consultarla. */
+        rcu_assign_pointer(active_program_snapshot, new_snapshot);
     }
-
     mutex_unlock(&program_update_lock);
 
     if (result != 0) {
+        /* La copia non Ã¨ stata pubblicata e puÃ² essere liberata subito. */
         kfree(new_snapshot);
         return result;
     }
 
+    /* Attende i lettori del vecchio snapshot prima di liberarlo, senza mutex. */
     synchronize_rcu();
-
     kfree(old_snapshot);
 
-    pr_info(
-        "syscall_throttle: programma '%s' deregistrato\n",
-        program.name
-    );
-
+    pr_info("syscall_throttle: programma '%s' %s\n", program.name,
+            add ? "registrato" : "deregistrato");
     return 0;
+}
+
+/* Le funzioni pubbliche mantengono l'interfaccia usata dal driver ioctl. */
+long syscall_throttle_program_register(unsigned long arg)
+{
+    return syscall_throttle_program_update(arg, true);
+}
+
+long syscall_throttle_program_unregister(unsigned long arg)
+{
+    return syscall_throttle_program_update(arg, false);
 }
 
 long syscall_throttle_program_get_list(unsigned long arg)
@@ -335,17 +248,12 @@ bool syscall_throttle_program_matches(const char *name)
     if (name == NULL || name[0] == '\0')
         return false;
 
-    found = false;
-
     rcu_read_lock();
 
     snapshot = rcu_dereference(active_program_snapshot);
 
-    if (syscall_throttle_program_find(
-            snapshot,
-            name) >= 0) {
-        found = true;
-    }
+    /* Legge il registro senza acquisire il mutex degli aggiornamenti. */
+    found = syscall_throttle_program_find(snapshot, name) >= 0;
 
     rcu_read_unlock();
 
