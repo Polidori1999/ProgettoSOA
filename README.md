@@ -29,7 +29,6 @@ Il progetto supporta:
 - gestione di system call bloccanti, non bloccanti e di system call che non ritornano al chiamante;
 - raccolta delle statistiche richieste dalla specifica;
 - controller user-space per configurare e interrogare il modulo;
-- suite automatica di test user-space;
 - demo riproducibili dei principali comportamenti del monitor.
 
 ## Struttura del repository
@@ -60,22 +59,10 @@ Il progetto supporta:
 │   ├── syscall_throttle_main.c
 │   ├── throttle_engine.c
 │   └── uid_registry.c
-├── user/
-│   ├── controller.c
-│   ├── controller.h
-│   └── main.c
-└── tests/
-    ├── include/
-    │   └── test_common.h
-    ├── lib/
-    │   └── common.sh
-    ├── run_test.sh
-    ├── test_common.c
-    ├── test_control_plane.c
-    ├── test_registries.c
-    ├── test_throttling.c
-    ├── test_concurrency.c
-    └── test_revalidation.c
+└── user/
+    ├── controller.c
+    ├── controller.h
+    └── main.c
 ```
 
 Le directory principali hanno i seguenti ruoli:
@@ -83,8 +70,7 @@ Le directory principali hanno i seguenti ruoli:
 - `include/`: interfaccia condivisa tra kernel-space e user-space, incluse strutture dati e richieste `ioctl`;
 - `kernel/`: implementazione del modulo, dei registri, del monitor, dell’intercettazione delle system call e delle statistiche;
 - `user/`: controller user-space utilizzato per configurare e interrogare il modulo;
-- `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor;
-- `tests/`: infrastruttura e test automatici del comportamento del sistema.
+- `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor.
 
 ## Requisiti
 
@@ -99,7 +85,7 @@ Per compilare ed eseguire il progetto sono necessari:
 
 I programmi controllati e le operazioni di consultazione non richiedono privilegi di root. La compatibilità del modulo è stata verificata nell’ambiente indicato sotto; l’intercettazione utilizza funzioni interne del kernel.
 
-## Ambiente di sviluppo e test
+## Ambiente di sviluppo e validazione
 
 Il progetto è stato sviluppato e testato nel seguente ambiente:
 
@@ -299,39 +285,11 @@ Le modifiche di MAX e dei registri sono rivalutate dai thread già bloccati al s
 
 Non viene imposto un ordine FIFO tra i thread in attesa: dopo ogni risveglio i thread competono nuovamente per la possibilità di eseguire la system call.
 
-## Test automatici
+## Branch del progetto
 
-Il repository include una suite di test user-space eseguibile con:
+Il branch principale `master` contiene il modulo, il controller e le sei demo utilizzate per la validazione della consegna.
 
-```bash
-make test
-```
-
-La suite compila il modulo e i programmi di test, carica e scarica automaticamente il modulo per ogni caso e controlla la presenza di errori critici nel kernel log.
-
-I test disponibili sono:
-
-- `test-control-plane`: verifica apertura del device, `PING`, lettura di `MAX` e attivazione/disattivazione del monitor;
-- `test-registries`: verifica registrazione, consultazione, duplicati e deregistrazione di UID, programmi e system call;
-- `test-throttling`: con `MAX=1` verifica che la seconda system call controllata venga posticipata alla finestra successiva;
-- `test-concurrency`: verifica il limite globale con più thread concorrenti e `MAX=1`;
-- `test-revalidation`: verifica che un thread bloccato venga rivalidato quando il monitor viene disattivato.
-
-Ogni test può essere eseguito anche singolarmente:
-
-```bash
-make test-control-plane
-make test-registries
-make test-throttling
-make test-concurrency
-make test-revalidation
-```
-
-Con `MAX=1`, il test di throttling osserva un ritardo di circa un secondo sulla seconda invocazione, mentre il test concorrente distribuisce i completamenti su finestre consecutive.
-
-Il test di rivalidazione verifica inoltre che `monitor-off` risvegli immediatamente un waiter senza attendere la finestra successiva.
-
-Al termine di ogni test viene verificato che il modulo sia scaricato e che non siano comparsi errori kernel critici.
+La versione con la suite di test automatici eseguita durante lo sviluppo è conservata separatamente nel branch [`con-test`](https://github.com/Polidori1999/ProgettoSOA/tree/con-test). Le relative istruzioni si trovano nel README di quel branch. I target dei test non sono presenti nel Makefile del branch principale.
 
 ## Demo
 
