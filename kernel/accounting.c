@@ -6,7 +6,7 @@
 /*
  * Protegge il numero globale di syscall giÃ  ammesse
  * nella finestra corrente.
- * Il timer puÃ² azzerarlo mentre altri CPU tentano di riservare un posto;
+ * Il timer può azzerarlo mentre altri CPU tentano di riservare un posto;
  * irqsave evita anche interferenze con il callback sulla stessa CPU.
  */
 static DEFINE_RAW_SPINLOCK(accounting_lock);

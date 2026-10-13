@@ -39,12 +39,12 @@ static u64 last_update_ns;
 
 /*
  * Indica se il tempo corrente appartiene a un intervallo
- * durante il quale il monitor Ã¨ attivo.
+ * durante il quale il monitor è attivo.
  */
 static bool monitor_observation_active;
 
 /*
- * Tempo cumulativo durante il quale il monitor Ã¨ stato
+ * Tempo cumulativo durante il quale il monitor è stato
  * attivo. I periodi monitor-off vengono esclusi.
  */
 static u64 monitor_enabled_time_ns;
@@ -75,7 +75,7 @@ static bool peak_delay_valid;
  *
  * La funzione deve essere chiamata con
  * statistics_lock giÃ  acquisito e now_ns deve essere
- * letto dopo l'acquisizione dello stesso lock, cosÃ¬
+ * letto dopo l'acquisizione dello stesso lock, così
  * i timestamp seguono l'ordine degli aggiornamenti.
  */
 static void syscall_throttle_statistics_update_time(
@@ -88,7 +88,7 @@ static void syscall_throttle_statistics_update_time(
         return;
     }
 
-    /* Il timestamp Ã¨ letto sotto lock: gli aggiornamenti seguono l'ordine temporale. */
+    /* Il timestamp è letto sotto lock: gli aggiornamenti seguono l'ordine temporale. */
     elapsed_ns = now_ns - last_update_ns;
 
     if (monitor_observation_active) {
@@ -144,7 +144,7 @@ u64 syscall_throttle_statistics_block_enter(void)
 
     syscall_throttle_statistics_update_time(now_ns);
 
-    /* Il tempo precedente Ã¨ giÃ  contabilizzato con il vecchio numero di thread. */
+    /* Il tempo precedente è già contabilizzato con il vecchio numero di thread. */
     ++current_blocked_threads;
 
     if (current_blocked_threads >
@@ -272,7 +272,7 @@ long syscall_throttle_statistics_get(unsigned long arg)
         flags
     );
 
-    /* La copia puÃ² causare page fault: va eseguita dopo il rilascio dello spinlock. */
+    /* La copia puÃò causare page fault: va eseguita dopo il rilascio dello spinlock. */
     if (copy_to_user(
             (void __user *)arg,
             &snapshot,

@@ -15,7 +15,7 @@
 
 
 /*
- * Ogni snapshot Ã¨ immutabile dopo essere stato pubblicato.
+ * Ogni snapshot è immutabile dopo essere stato pubblicato.
  *
  * Gli scrittori costruiscono un nuovo snapshot e lo
  * pubblicano tramite rcu_assign_pointer().
@@ -33,7 +33,7 @@ struct syscall_throttle_uid_snapshot {
 /*
  * Puntatore allo snapshot attualmente visibile.
  *
- * Inizialmente Ã¨ NULL e rappresenta un registro vuoto.
+ * Inizialmente è NULL e rappresenta un registro vuoto.
  */
 static struct syscall_throttle_uid_snapshot __rcu
     *active_uid_snapshot;

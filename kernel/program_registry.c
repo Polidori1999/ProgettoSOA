@@ -47,7 +47,7 @@ static int syscall_throttle_program_validate(
     const struct syscall_throttle_program *program)
 {
     /*
-     * Il nome non puÃ² essere vuoto.
+     * Il nome non può essere vuoto.
      */
     if (program->name[0] == '\0')
         return -EINVAL;

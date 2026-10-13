@@ -130,7 +130,7 @@ void syscall_throttle_engine_monitor_enabled(void)
     hrtimer_cancel(&window_timer);
 
     /*
-     * La quota Ã¨ giÃ  stata azzerata da config.c prima
+     * La quota è già  stata azzerata da config.c prima
      * di rendere attivo il monitor.
      */
     atomic64_inc(&window_generation);
@@ -161,7 +161,7 @@ bool syscall_throttle_engine_evaluate(
     memset(decision, 0, sizeof(*decision));
 
     /*
-     * Se il monitor Ã¨ disattivato, la syscall non
+     * Se il monitor è disattivato, la syscall non
      * deve essere verificata nÃ© conteggiata.
      */
     if (!syscall_throttle_config_monitor_enabled())
@@ -175,7 +175,7 @@ bool syscall_throttle_engine_evaluate(
         return false;
 
     /*
-     * La bitmap delle syscall Ã¨ il controllo piÃ¹
+     * La bitmap delle syscall è il controllo più
      * economico, quindi viene eseguito per primo.
      */
     if (!syscall_throttle_syscall_matches(
@@ -280,7 +280,7 @@ int syscall_throttle_engine_enforce(
         }
 
         /*
-         * La syscall ha ottenuto un posto e puÃ² essere
+         * La syscall ha ottenuto un posto e può essere
          * eseguita.
          */
         if (!decision->accounting.exceeded) {
@@ -396,7 +396,7 @@ out:
      * Il tempo termina qui, prima dell'esecuzione della syscall: non include
      * eventuali attese interne alla syscall originale.
      *
-     * result >= 0 significa che il dispatcher eseguirÃ
+     * result >= 0 significa che il dispatcher eseguirà
      * comunque la syscall originale.
      */
     if (task_blocked) {
@@ -417,7 +417,7 @@ void syscall_throttle_engine_monitor_disabled(void)
 {
     /*
      * Cancella sincronicamente il timer. L'operazione
-     * Ã¨ innocua anche quando il timer non Ã¨ armato.
+     * è innocua anche quando il timer non è armato.
      */
     hrtimer_cancel(&window_timer);
 
