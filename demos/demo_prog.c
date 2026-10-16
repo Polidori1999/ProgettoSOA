@@ -6,14 +6,9 @@
 #include <sys/prctl.h>
 #include <time.h>
 
-#define COMM_LEN 16
+#include "include/demo_common.h"
 
-static long elapsed_ms(const struct timespec *start,
-                       const struct timespec *end)
-{
-    return (end->tv_sec - start->tv_sec) * 1000L +
-           (end->tv_nsec - start->tv_nsec) / 1000000L;
-}
+#define COMM_LEN 16
 
 int main(void)
 {
@@ -27,10 +22,7 @@ int main(void)
         return 1;
     }
 
-    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
-        perror("clock_gettime");
-        return 1;
-    }
+    start = demo_now();
 
     printf("Demo sequential getpid throttling\n");
     printf("Task comm: %s\n", comm);
@@ -40,17 +32,17 @@ int main(void)
         struct timespec before;
         struct timespec after;
 
-        clock_gettime(CLOCK_MONOTONIC, &before);
+        before = demo_now();
 
         long pid = syscall(SYS_getpid);
 
-        clock_gettime(CLOCK_MONOTONIC, &after);
+        after = demo_now();
 
         printf("call %d -> pid=%ld | completata a +%ld ms | attesa=%ld ms\n",
                i,
                pid,
-               elapsed_ms(&start, &after),
-               elapsed_ms(&before, &after));
+               demo_elapsed_ms(&start, &after),
+               demo_elapsed_ms(&before, &after));
     }
 
     return 0;

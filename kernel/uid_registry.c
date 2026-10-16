@@ -143,7 +143,7 @@ static long syscall_throttle_uid_update(unsigned long arg, bool add)
     mutex_unlock(&uid_update_lock);
 
     if (result != 0) {
-        /* La copia non Ã¨ stata pubblicata e puÃ² essere liberata subito. */
+        /* La copia non è stata pubblicata e puÃò essere liberata subito. */
         kfree(new_snapshot);
         return result;
     }
@@ -241,7 +241,7 @@ void syscall_throttle_uid_registry_cleanup(void)
 
     /*
      * Prima di liberare lo snapshot attendiamo la fine
-     * degli eventuali lettori giÃ  entrati in RCU.
+     * degli eventuali lettori già  entrati in RCU.
      */
     synchronize_rcu();
 

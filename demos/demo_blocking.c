@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "syscall_throttle_ioctl.h"
+#include "include/demo_common.h"
 
 #define READER_NAME "soa-read-demo"
 #define WRITER_NAME "soa-writer"
@@ -23,39 +24,6 @@ static int pipe_fds[2];
 static int device_fd;
 static pthread_barrier_t start_barrier;
 static uint64_t start_ns;
-
-static void fail(const char *operation)
-{
-    perror(operation);
-    exit(EXIT_FAILURE);
-}
-
-static void check_pthread(int result, const char *operation)
-{
-    if (result != 0) {
-        fprintf(stderr, "%s: %s\n", operation, strerror(result));
-        exit(EXIT_FAILURE);
-    }
-}
-
-static void wait_start(void)
-{
-    int result = pthread_barrier_wait(&start_barrier);
-
-    if (result != PTHREAD_BARRIER_SERIAL_THREAD)
-        check_pthread(result, "pthread_barrier_wait");
-}
-
-static uint64_t now_ns(void)
-{
-    struct timespec now;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
-        fail("clock_gettime");
-
-    return (uint64_t)now.tv_sec * UINT64_C(1000000000) +
-           (uint64_t)now.tv_nsec;
-}
 
 static double elapsed_ms(uint64_t timestamp)
 {
@@ -71,7 +39,7 @@ static void sleep_ms(unsigned int milliseconds)
 
     while (nanosleep(&remaining, &remaining) != 0) {
         if (errno != EINTR)
-            fail("nanosleep");
+            demo_fail("nanosleep");
     }
 }
 
@@ -80,10 +48,10 @@ static void print_waiters(const char *description)
     struct syscall_throttle_statistics stats = {0};
 
     if (ioctl(device_fd, SYSCALL_THROTTLE_IOC_GET_STATS, &stats) != 0)
-        fail("GET_STATS");
+        demo_fail("GET_STATS");
 
     printf("  +%.3f ms | %s | waiter del monitor=%u\n",
-           elapsed_ms(now_ns()), description,
+           elapsed_ms(demo_now_ns()), description,
            stats.current_blocked_threads);
 }
 
@@ -95,9 +63,9 @@ static void *writer_main(void *argument)
 
     /* Il writer deve poter fornire dati senza essere selezionato. */
     if (prctl(PR_SET_NAME, WRITER_NAME, 0, 0, 0) != 0)
-        fail("PR_SET_NAME writer");
+        demo_fail("PR_SET_NAME writer");
 
-    wait_start();
+    demo_wait_barrier(&start_barrier);
     sleep_ms(200);
 
     print_waiters("prima di fornire dati alla pipe");
@@ -109,7 +77,7 @@ static void *writer_main(void *argument)
     if (written != 2) {
         if (written >= 0)
             errno = EIO;
-        fail("write pipe");
+        demo_fail("write pipe");
     }
 
     sleep_ms(200);
@@ -120,18 +88,18 @@ static void *writer_main(void *argument)
 static void read_one_byte(unsigned int number)
 {
     char byte;
-    uint64_t before = now_ns();
+    uint64_t before = demo_now_ns();
     uint64_t after;
     long result;
 
     /* read bloccante reale, con richiesta esplicita di un byte. */
     result = syscall(SYS_read, pipe_fds[0], &byte, 1);
-    after = now_ns();
+    after = demo_now_ns();
 
     if (result != 1) {
         if (result >= 0)
             errno = EIO;
-        fail("read pipe");
+        demo_fail("read pipe");
     }
 
     printf("  read %u -> '%c' | completata a +%.3f ms | durata=%.3f ms\n",
@@ -148,50 +116,50 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
 
     if (pipe(pipe_fds) != 0)
-        fail("pipe");
+        demo_fail("pipe");
 
     device_fd = open("/dev/syscall_throttle", O_RDWR);
     if (device_fd < 0)
-        fail("open /dev/syscall_throttle");
+        demo_fail("open /dev/syscall_throttle");
 
     if (ioctl(device_fd, SYSCALL_THROTTLE_IOC_GET_MONITOR, &monitor) != 0)
-        fail("GET_MONITOR");
+        demo_fail("GET_MONITOR");
 
-    check_pthread(pthread_barrier_init(&start_barrier, NULL, 2),
-                  "pthread_barrier_init");
-    check_pthread(pthread_create(&writer, NULL, writer_main, NULL),
-                  "pthread_create");
+    demo_check_pthread(pthread_barrier_init(&start_barrier, NULL, 2),
+                       "pthread_barrier_init");
+    demo_check_pthread(pthread_create(&writer, NULL, writer_main, NULL),
+                       "pthread_create");
 
     /*
      * Seleziona il reader solo dopo l'inizializzazione: le read
      * del loader non devono consumare il budget della demo.
      */
     if (prctl(PR_SET_NAME, READER_NAME, 0, 0, 0) != 0)
-        fail("PR_SET_NAME reader");
+        demo_fail("PR_SET_NAME reader");
 
     printf("Monitor: %s | reader: %s | syscall read: %ld\n",
            monitor ? "ON" : "OFF", READER_NAME, (long)SYS_read);
     printf("Il writer fornisce due byte dopo circa 200 ms.\n");
 
-    start_ns = now_ns();
-    wait_start();
+    start_ns = demo_now_ns();
+    demo_wait_barrier(&start_barrier);
 
     read_one_byte(1);
 
     if (ioctl(pipe_fds[0], FIONREAD, &available) != 0)
-        fail("FIONREAD");
+        demo_fail("FIONREAD");
 
     printf("  Prima della seconda read: byte gia' nella pipe=%d\n",
            available);
     read_one_byte(2);
 
-    check_pthread(pthread_join(writer, NULL), "pthread_join");
-    check_pthread(pthread_barrier_destroy(&start_barrier),
-                  "pthread_barrier_destroy");
+    demo_check_pthread(pthread_join(writer, NULL), "pthread_join");
+    demo_check_pthread(pthread_barrier_destroy(&start_barrier),
+                       "pthread_barrier_destroy");
 
     if (close(pipe_fds[0]) != 0 || close(pipe_fds[1]) != 0 ||
         close(device_fd) != 0)
-        fail("close");
+        demo_fail("close");
 
     return EXIT_SUCCESS;
 }

@@ -4,7 +4,7 @@
 #include "accounting.h"
 
 /*
- * Protegge il numero globale di syscall giÃ  ammesse
+ * Protegge il numero globale di syscall già ammesse
  * nella finestra corrente.
  * Il timer può azzerarlo mentre altri CPU tentano di riservare un posto;
  * irqsave evita anche interferenze con il callback sulla stessa CPU.

@@ -162,7 +162,7 @@ bool syscall_throttle_engine_evaluate(
 
     /*
      * Se il monitor è disattivato, la syscall non
-     * deve essere verificata nÃ© conteggiata.
+     * deve essere verificata nè conteggiata.
      */
     if (!syscall_throttle_config_monitor_enabled())
         return false;
@@ -202,7 +202,6 @@ bool syscall_throttle_engine_evaluate(
         );
 
     /*
-     * Il progetto richiede:
      *
      * effective UID registrato
      * OR

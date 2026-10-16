@@ -7,6 +7,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "include/demo_common.h"
+
 #define NUM_WORKERS 3
 
 struct result {
@@ -21,13 +23,6 @@ static pthread_barrier_t start_barrier;
 static struct timespec global_start;
 static struct result results[NUM_WORKERS];
 
-static long elapsed_ms(const struct timespec *start,
-                       const struct timespec *end)
-{
-    return (end->tv_sec - start->tv_sec) * 1000L +
-           (end->tv_nsec - start->tv_nsec) / 1000000L;
-}
-
 static void *worker(void *arg)
 {
     int id = *(int *)arg;
@@ -37,23 +32,23 @@ static void *worker(void *arg)
     /*
      * Tutti i worker comunicano di essere pronti.
      */
-    pthread_barrier_wait(&ready_barrier);
+    demo_wait_barrier(&ready_barrier);
 
     /*
      * Attendono il segnale di partenza comune.
      */
-    pthread_barrier_wait(&start_barrier);
+    demo_wait_barrier(&start_barrier);
 
-    clock_gettime(CLOCK_MONOTONIC, &before);
+    before = demo_now();
 
     long pid = syscall(SYS_getpid);
 
-    clock_gettime(CLOCK_MONOTONIC, &after);
+    after = demo_now();
 
     results[id].worker = id + 1;
     results[id].pid = pid;
-    results[id].wait_ms = elapsed_ms(&before, &after);
-    results[id].completion_ms = elapsed_ms(&global_start, &after);
+    results[id].wait_ms = demo_elapsed_ms(&before, &after);
+    results[id].completion_ms = demo_elapsed_ms(&global_start, &after);
 
     return NULL;
 }
@@ -78,11 +73,10 @@ int main(void)
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
-    if (pthread_barrier_init(&ready_barrier, NULL, NUM_WORKERS + 1) != 0 ||
-        pthread_barrier_init(&start_barrier, NULL, NUM_WORKERS + 1) != 0) {
-        perror("pthread_barrier_init");
-        return 1;
-    }
+    demo_check_pthread(pthread_barrier_init(&ready_barrier, NULL, NUM_WORKERS + 1),
+                       "pthread_barrier_init ready");
+    demo_check_pthread(pthread_barrier_init(&start_barrier, NULL, NUM_WORKERS + 1),
+                       "pthread_barrier_init start");
 
     printf("Demo concurrency throttling\n");
     printf("Program: demo_conc\n");
@@ -92,26 +86,24 @@ int main(void)
     for (int i = 0; i < NUM_WORKERS; i++) {
         ids[i] = i;
 
-        if (pthread_create(&threads[i], NULL, worker, &ids[i]) != 0) {
-            perror("pthread_create");
-            return 1;
-        }
+        demo_check_pthread(pthread_create(&threads[i], NULL, worker, &ids[i]),
+                           "pthread_create");
     }
 
     /*
      * Aspettiamo che tutti i worker siano pronti.
      */
-    pthread_barrier_wait(&ready_barrier);
+    demo_wait_barrier(&ready_barrier);
 
-    clock_gettime(CLOCK_MONOTONIC, &global_start);
+    global_start = demo_now();
 
     /*
      * Partenza contemporanea.
      */
-    pthread_barrier_wait(&start_barrier);
+    demo_wait_barrier(&start_barrier);
 
     for (int i = 0; i < NUM_WORKERS; i++)
-        pthread_join(threads[i], NULL);
+        demo_check_pthread(pthread_join(threads[i], NULL), "pthread_join");
 
     qsort(results,
           NUM_WORKERS,
@@ -128,8 +120,10 @@ int main(void)
                results[i].wait_ms);
     }
 
-    pthread_barrier_destroy(&ready_barrier);
-    pthread_barrier_destroy(&start_barrier);
+    demo_check_pthread(pthread_barrier_destroy(&ready_barrier),
+                       "pthread_barrier_destroy ready");
+    demo_check_pthread(pthread_barrier_destroy(&start_barrier),
+                       "pthread_barrier_destroy start");
 
     return 0;
 }

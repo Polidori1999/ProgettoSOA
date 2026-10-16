@@ -37,6 +37,8 @@ Il progetto supporta:
 .
 ├── Makefile
 ├── demos/
+│   ├── include/
+│   │   └── demo_common.h
 │   ├── demo_prog.c
 │   ├── demo_concurrency.c
 │   ├── demo_blocking.c
@@ -49,6 +51,17 @@ Il progetto supporta:
 ├── include/
 │   └── syscall_throttle_ioctl.h
 ├── kernel/
+│   ├── Makefile
+│   ├── include/
+│   │   ├── access_control.h
+│   │   ├── accounting.h
+│   │   ├── config.h
+│   │   ├── dispatcher_hook.h
+│   │   ├── program_registry.h
+│   │   ├── statistics.h
+│   │   ├── syscall_registry.h
+│   │   ├── throttle_engine.h
+│   │   └── uid_registry.h
 │   ├── accounting.c
 │   ├── config.c
 │   ├── dispatcher_entry.S
@@ -67,10 +80,11 @@ Il progetto supporta:
 
 Le directory principali hanno i seguenti ruoli:
 
-- `include/`: interfaccia condivisa tra kernel-space e user-space, incluse strutture dati e richieste `ioctl`;
+- `include/`: interfaccia condivisa tra kernel-space e user-space; `syscall_throttle_ioctl.h` definisce le strutture dati e le richieste `ioctl` usate dal modulo, dal controller e dalle demo;
 - `kernel/`: implementazione del modulo, dei registri, del monitor, dell’intercettazione delle system call e delle statistiche;
+- `kernel/include/`: header interni che dichiarano le funzioni e le strutture condivise tra i componenti del modulo kernel;
 - `user/`: controller user-space utilizzato per configurare e interrogare il modulo;
-- `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor.
+- `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor; `demos/include/demo_common.h` raccoglie le utilità condivise per misurare i tempi e gestire errori e barriere pthread.
 
 ## Requisiti
 
@@ -285,12 +299,6 @@ Le modifiche di MAX e dei registri sono rivalutate dai thread già bloccati al s
 
 Non viene imposto un ordine FIFO tra i thread in attesa: dopo ogni risveglio i thread competono nuovamente per la possibilità di eseguire la system call.
 
-## Branch del progetto
-
-Il branch principale `master` contiene il modulo, il controller e le sei demo utilizzate per la validazione della consegna.
-
-La versione con la suite di test automatici eseguita durante lo sviluppo è conservata separatamente nel branch [`con-test`](https://github.com/Polidori1999/ProgettoSOA/tree/con-test). Le relative istruzioni si trovano nel README di quel branch. I target dei test non sono presenti nel Makefile del branch principale.
-
 ## Demo
 
 Il repository include alcune demo pensate per mostrare in modo diretto e leggibile i principali comportamenti del monitor.
@@ -316,6 +324,8 @@ Configura `MAX=1`, registra il programma `demo_prog` e la system call `getpid`.
 Il programma esegue più invocazioni consecutive di `getpid()`. La prima può procedere immediatamente, mentre le successive vengono ritardate fino all'apertura delle finestre temporali successive.
 
 La demo mostra quindi il matching basato sul nome del task Linux (`comm`).
+
+Infine rimuove `demo_prog` dal registro lasciando il monitor acceso e riesegue il programma: le quattro chiamate devono procedere senza attesa del monitor. Questa fase verifica l'effetto della deregistrazione del nome.
 
 ### Demo 2 — Matching tramite EUID
 
@@ -349,6 +359,8 @@ Al termine vengono mostrate anche le statistiche del monitor, tra cui:
 - massimo ritardo osservato;
 - UID associato al massimo ritardo;
 - programma associato al massimo ritardo.
+
+Segue una verifica aggiuntiva con due istanze di `demo_prog`, ciascuna con quattro `getpid`. Il modulo viene ricaricato per separare le statistiche dalla prova dei worker. Con `MAX=1` le otto chiamate condividono la stessa quota anche fra processi distinti: il completamento complessivo è atteso circa sette secondi dopo la prima ammissione. I log mostrano PID diversi; l'ordine di ammissione non è garantito e i tempi stampati sono relativi all'avvio di ciascun processo. Questa fase aggiunge circa sette secondi alla demo e riutilizza il programma esistente.
 
 ### Demo 4 — Rivalidazione dopo `monitor-off`
 

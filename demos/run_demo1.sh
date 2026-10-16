@@ -48,4 +48,14 @@ echo "===== ESECUZIONE ====="
 "$DEMO"
 
 echo
+echo "===== RIMOZIONE NOME CON MONITOR ANCORA ON ====="
+
+sudo "$CTL" program-remove demo_prog
+"$CTL" monitor-status
+"$CTL" program-list
+
+echo "Le quattro chiamate ora devono passare senza attesa del monitor."
+"$DEMO"
+
+echo
 echo "===== DEMO 1 COMPLETATA ====="
