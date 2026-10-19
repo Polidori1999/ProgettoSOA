@@ -4,15 +4,7 @@ Progetto sviluppato per il corso di **Advanced Operating Systems (and System Sec
 
 Il progetto implementa un **Linux Kernel Module (LKM)** per il throttling delle system call su architettura x86-64.
 
-Il modulo permette di registrare nomi di programmi, effective user ID (EUID) e numeri di system call. Una system call viene controllata quando il suo numero è registrato e il processo chiamante corrisponde a un programma registrato oppure a un EUID registrato.
-
-La condizione di controllo è quindi:
-
-```text
-syscall registrata && (programma registrato || EUID registrato)
-```
-
-Il monitor applica un limite globale `MAX` al numero di system call controllate che possono essere eseguite in ogni finestra temporale di un secondo. Quando il limite viene raggiunto, le ulteriori invocazioni vengono temporaneamente bloccate.
+Il modulo permette di configurare tramite un controller user-space quali programmi, EUID e system call controllare. Un monitor applica un budget globale `MAX` di ammissioni per finestra di un secondo, sospendendo temporaneamente i thread quando la quota è esaurita.
 
 ## Funzionalità principali
 
@@ -86,6 +78,34 @@ Le directory principali hanno i seguenti ruoli:
 - `user/`: controller user-space utilizzato per configurare e interrogare il modulo;
 - `demos/`: programmi e script utilizzati per le dimostrazioni interattive del comportamento del monitor; `demos/include/demo_common.h` raccoglie le utilità condivise per misurare i tempi e gestire errori e barriere pthread.
 
+## Flusso di funzionamento
+
+Il controller user-space invia i comandi di configurazione tramite `ioctl` al device `/dev/syscall_throttle`. Il driver kernel li smista ai componenti che gestiscono registri, MAX, stato del monitor e statistiche.
+
+Quando viene invocata una syscall registrata, una Kprobe sul dispatcher `x64_sys_call` redirige l'esecuzione verso un **trampoline assembly**, cioè una breve funzione che collega il punto di intercettazione al codice del monitor.
+
+Il pre-handler della Kprobe si limita alla redirezione, perché non può sospendere il thread nel proprio contesto di esecuzione. Il trampoline chiama quindi un helper C, che applica il controllo tramite il motore di throttling, conservando le informazioni necessarie per raggiungere successivamente la syscall originale.
+
+L'helper chiama il motore, che verifica la selezione della chiamata e la disponibilità di quota tramite l'accounting. Se necessario, il thread attende nella wait queue del motore, risvegliato dal timer o dagli altri eventi previsti. Le regole di selezione, rinnovo e uscita dall'attesa sono descritte nella sezione [Semantica del throttling](#semantica-del-throttling).
+
+Quando la chiamata può procedere, l'helper restituisce al trampoline l'indirizzo della funzione originale di Linux. Il trampoline ripristina il contesto necessario e **salta alla funzione originale senza lasciare un indirizzo di ritorno nel modulo**. Il lavoro del monitor termina quindi prima dell'esecuzione della syscall, anche se questa successivamente si blocca o non ritorna.
+
+Se l'attesa viene interrotta con un errore, il trampoline restituisce invece tale errore al percorso kernel chiamante. Il componente delle statistiche registra l'ingresso e l'uscita dall'attesa del monitor.
+
+### File coinvolti nel flusso
+
+La configurazione e l'esecuzione delle syscall sono due percorsi distinti: il controller configura il modulo, mentre le chiamate dei programmi vengono controllate attraverso il percorso di intercettazione.
+
+| Fase | File principali | Ruolo |
+|---|---|---|
+| Configurazione | `user/main.c`, `user/controller.c` | Avviano il controller, interpretano i comandi e inviano le richieste `ioctl`. |
+| Gestione del device | `kernel/syscall_throttle_main.c` | Registra il device e smista le richieste ai gestori della configurazione. |
+| Configurazione e registri | `kernel/config.c`, `kernel/uid_registry.c`, `kernel/program_registry.c`, `kernel/syscall_registry.c` | Gestiscono MAX, ON/OFF e gli elementi registrati. |
+| Intercettazione | `kernel/dispatcher_hook.c` | Installa la Kprobe, redirige al trampoline e contiene l'helper C che prepara il passaggio alla syscall originale. |
+| Collegamento assembly | `kernel/dispatcher_entry.S` | Conserva il contesto necessario, chiama l'helper C e usa il risultato per saltare alla syscall originale o restituire un errore. |
+| Controllo e attesa | `kernel/throttle_engine.c`, `kernel/accounting.c` | Verificano il matching, prenotano quota e gestiscono timer, sospensione e risveglio. |
+| Statistiche | `kernel/statistics.c` | Misura waiter e ritardi; il controller calcola la media e stampa i risultati. |
+
 ## Requisiti
 
 Per compilare ed eseguire il progetto sono necessari:
@@ -132,37 +152,26 @@ make
 
 È disponibile anche il target `make rebuild`.
 
+`make`, `make clean` e `make rebuild` operano sui file di compilazione: non scaricano né sostituiscono un modulo già caricato nel kernel. Dopo una modifica al codice del modulo, usare `make reload` per eseguire la nuova versione.
+
 Per rimuovere gli artefatti generati:
 
 ```bash
 make clean
 ```
 
-## Caricamento e scaricamento del modulo
+## Gestione del modulo
 
-Il modulo può essere caricato con:
+`make` compila il progetto, ma non carica il modulo nel kernel. Per inviare direttamente i comandi del controller descritti sotto, caricare prima il modulo con `make load`, se non è già caricato. Il caricamento rende disponibile `/dev/syscall_throttle` e installa l'intercettazione; la configurazione e l'attivazione del monitor avvengono poi tramite il controller.
 
-```bash
-make load
-```
+Se si eseguono le demo, non occorre lanciare prima `make load`: gli script eseguono già `make reload` e i comandi di configurazione necessari.
 
-e scaricato con:
-
-```bash
-make unload
-```
-
-Per scaricare e ricaricare il modulo in un unico comando:
-
-```bash
-make reload
-```
-
-I messaggi recenti prodotti dal modulo nel kernel log possono essere visualizzati con:
-
-```bash
-make logs
-```
+| Comando | Operazione |
+|---|---|
+| `make load` | Compila e carica `kernel/syscall_throttle.ko`. |
+| `make unload` | Scarica il modulo dal kernel. |
+| `make reload` | Scarica e ricarica il modulo, azzerando configurazione e statistiche. |
+| `make logs` | Mostra i messaggi recenti del modulo nel log del kernel. |
 
 ## Utilizzo del controller
 
@@ -236,6 +245,8 @@ sudo ./build/syscall_throttle_ctl monitor-off
 
 ### Registrazione degli elementi controllati
 
+La configurazione è mantenuta in memoria dal modulo caricato nel kernel: i comandi del controller non modificano un file di configurazione.
+
 Il registro dei programmi confronta il nome del task Linux (`comm`), ottenuto con `get_task_comm()`. L’interfaccia accetta da 1 a 15 caratteri significativi più il terminatore nullo. Il nome è modificabile e può differire tra thread dello stesso processo.
 
 È possibile registrare fino a 64 UID e 64 nomi di programmi. I numeri delle system call si riferiscono alla ABI x86-64 nativa.
@@ -271,7 +282,7 @@ In forma compatta:
 syscall registrata && (programma registrato || EUID registrato)
 ```
 
-Il limite `MAX` è globale: rappresenta il numero massimo complessivo di system call controllate che possono essere eseguite durante una finestra temporale di un secondo.
+Il limite `MAX` è globale: rappresenta il numero massimo complessivo di system call controllate che possono essere ammesse all’esecuzione durante una finestra temporale di un secondo.
 
 Le finestre temporali sono consecutive, non sovrapposte e gestite autonomamente dal kernel tramite un timer monotono. La prima finestra parte all’attivazione del monitor. All’inizio di una nuova finestra il conteggio delle invocazioni viene azzerato e i thread eventualmente in attesa vengono risvegliati.
 
@@ -279,9 +290,9 @@ Il budget è condiviso tra tutti i programmi, EUID e numeri di syscall seleziona
 
 Il controllo non usa una finestra scorrevole: due chiamate possono essere ammesse a breve distanza se appartengono a finestre consecutive.
 
-Quando `MAX` viene raggiunto, le ulteriori invocazioni controllate non eseguono immediatamente la system call reale, ma il thread chiamante viene temporaneamente sospeso.
+Quando `MAX` viene raggiunto, il thread che invoca un’altra syscall controllata viene temporaneamente sospeso prima di raggiungere la funzione originale.
 
-Al risveglio, il thread rivaluta completamente la configurazione corrente. In particolare vengono nuovamente controllati:
+Al risveglio per una nuova finestra, se l’attesa non è stata annullata, il thread rivaluta la configurazione corrente e compete nuovamente per la quota. In particolare vengono controllati:
 
 - stato del monitor;
 - registrazione della system call;
@@ -289,15 +300,15 @@ Al risveglio, il thread rivaluta completamente la configurazione corrente. In pa
 - effective UID corrente;
 - disponibilità rispetto al valore di `MAX`.
 
-Questo permette, ad esempio, a un thread già bloccato di procedere se nel frattempo il monitor viene disattivato o la sua invocazione non risulta più soggetta al controllo.
+Se la chiamata non risulta più soggetta al controllo, il thread può procedere senza consumare quota. OFF e shutdown annullano invece l’attesa e consentono la prosecuzione senza richiedere un posto nella finestra; un segnale può interrompere l’attesa con un errore.
 
 Quando il monitor è disattivato, nessun limite viene applicato alle system call e le invocazioni procedono normalmente. `monitor-off` risveglia i waiter senza attendere il tick successivo.
 
 `monitor-on` è idempotente: se il monitor è già attivo, non azzera la quota consumata e non riavvia il timer. Dopo una disattivazione, una nuova attivazione apre una finestra con quota vuota.
 
-Le modifiche di MAX e dei registri sono rivalutate dai thread già bloccati al successivo risveglio; queste modifiche non provocano da sole un risveglio immediato.
+Le modifiche di MAX e dei registri non provocano da sole un risveglio immediato: vengono considerate alla successiva rivalutazione.
 
-Non viene imposto un ordine FIFO tra i thread in attesa: dopo ogni risveglio i thread competono nuovamente per la possibilità di eseguire la system call.
+Non viene imposto un ordine FIFO tra i thread in attesa: dopo il risveglio per una nuova finestra i thread competono nuovamente per la possibilità di eseguire la system call.
 
 ## Demo
 
@@ -362,6 +373,8 @@ Al termine vengono mostrate anche le statistiche del monitor, tra cui:
 
 Segue una verifica aggiuntiva con due istanze di `demo_prog`, ciascuna con quattro `getpid`. Il modulo viene ricaricato per separare le statistiche dalla prova dei worker. Con `MAX=1` le otto chiamate condividono la stessa quota anche fra processi distinti: il completamento complessivo è atteso circa sette secondi dopo la prima ammissione. I log mostrano PID diversi; l'ordine di ammissione non è garantito e i tempi stampati sono relativi all'avvio di ciascun processo. Questa fase aggiunge circa sette secondi alla demo e riutilizza il programma esistente.
 
+I due processi non sono obbligati ad alternarsi: uno può ottenere quota in più finestre consecutive, mentre l'altro continua ad aspettare. Gli output vengono salvati separatamente e mostrati solo dopo che entrambi sono terminati e il monitor è stato spento. Per questo nel terminale `Monitor disattivato` compare prima dei log dei processi, anche se le loro chiamate sono state eseguite durante il periodo ON.
+
 ### Demo 4 — Rivalidazione dopo `monitor-off`
 
 ```bash
@@ -372,7 +385,7 @@ Configura il monitor in modo da ottenere almeno un thread realmente bloccato e v
 
 Il monitor viene quindi disattivato mentre il thread è in attesa.
 
-Il waiter viene risvegliato, rivalida la configurazione corrente e può procedere senza attendere l'apertura della finestra temporale successiva.
+Il waiter viene risvegliato, riconosce la disattivazione del monitor e procede senza richiedere quota, senza attendere la finestra temporale successiva.
 
 ### Demo 5 — Privilegi
 
