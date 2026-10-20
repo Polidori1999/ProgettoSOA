@@ -106,6 +106,18 @@ La configurazione e l'esecuzione delle syscall sono due percorsi distinti: il co
 | Controllo e attesa | `kernel/throttle_engine.c`, `kernel/accounting.c` | Verificano il matching, prenotano quota e gestiscono timer, sospensione e risveglio. |
 | Statistiche | `kernel/statistics.c` | Misura waiter e ritardi; il controller calcola la media e stampa i risultati. |
 
+### Sincronizzazione e contesti
+
+Il **percorso di configurazione (Control Plane)** comprende il controller e i gestori `ioctl`. Le modifiche richiedono EUID 0. I mutex serializzano gli aggiornamenti dei registri e le transizioni ON/OFF.
+
+Il **percorso delle syscall (Data Plane)** consulta la configurazione e applica il limite globale. I registri di UID e programmi usano **snapshot immutabili protetti da RCU**: gli aggiornamenti pubblicano una nuova copia tramite `rcu_assign_pointer()` e attendono la fine dei lettori precedenti con `synchronize_rcu()` prima di liberare quella vecchia. Il registro delle syscall usa una bitmap, con aggiornamenti serializzati da mutex e letture tramite `test_bit()`.
+
+Un **`raw_spinlock`** protegge il contatore globale: verifica della quota e incremento avvengono nella stessa sezione critica, coordinata anche con il reset del timer. Uno spinlock separato protegge conteggi, integrali e picchi delle statistiche. Le letture e scritture di stato del monitor e MAX usano `READ_ONCE()` e `WRITE_ONCE()`; queste macro non sostituiscono i lock e non rendono atomica l'intera configurazione.
+
+Quando manca quota, il thread attende con `wait_event_interruptible()` su una **wait queue**, senza mantenere spinlock né sezioni di lettura RCU. Un **`hrtimer` monotono** rinnova autonomamente la finestra ogni secondo e risveglia i waiter, che competono nuovamente per la quota. Due contatori atomici di generazione permettono di riconoscere l'apertura di una finestra e gli eventi OFF/shutdown, anche se avvengono durante la valutazione.
+
+Il pre-handler Kprobe e il callback del timer operano in contesto atomico e non sospendono il thread. L'attesa avviene nel percorso rediretto dal trampoline, durante l'esecuzione dell'helper C. Le copie verso lo spazio utente vengono eseguite dopo aver rilasciato gli spinlock e le sezioni di lettura RCU, perché possono causare page fault.
+
 ## Requisiti
 
 Per compilare ed eseguire il progetto sono necessari:
@@ -313,6 +325,19 @@ Non viene imposto un ordine FIFO tra i thread in attesa: dopo il risveglio per u
 ## Demo
 
 Il repository include alcune demo pensate per mostrare in modo diretto e leggibile i principali comportamenti del monitor.
+
+Ogni script prepara la configurazione del proprio esperimento e avvia il programma user-space indicato nella tabella. I sorgenti C delle prove si trovano in `demos/`; il controller si trova in `user/`.
+
+| Demo | Script | Programma di prova | Proprietà osservata |
+|---|---|---|---|
+| 1 | `demos/run_demo1.sh` | `demo_prog.c` | Matching per nome e passaggio senza quota dopo la deregistrazione. |
+| 2 | `demos/run_demo2.sh` | `demo_prog.c` | Matching per EUID, indipendente dal nome. |
+| 3 | `demos/run_demo3.sh` | `demo_concurrency.c`, `demo_prog.c` | Quota globale condivisa tra thread e processi distinti. |
+| 4 | `demos/run_demo4.sh` | `demo_prog.c` | OFF libera un waiter precedentemente osservato nelle statistiche. |
+| 5 | `demos/run_demo5.sh` | Controller `syscall_throttle_ctl` | Consultazione senza privilegi e protezione kernel di `SET_MAX`. |
+| 6 | `demos/run_demo6.sh` | `demo_blocking.c` | Distinzione tra attesa dei dati e attesa imposta dal monitor. |
+
+Le demo verificano i casi descritti e mostrano tempi indicativi, dipendenti dallo scheduling. Non costituiscono una verifica esaustiva di tutti gli interleaving concorrenti.
 
 Prima delle demo, compilare il progetto dalla sua cartella principale:
 
